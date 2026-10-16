@@ -561,11 +561,17 @@ public partial class MainWindow : Window
             var match = Regex.Match(line, @"^\s*(?<mark>[-*+]|\d+\.)\s+(?<text>.*)$", RegexOptions.None, RegexTimeout);
             var paragraph = ParagraphWithInline(match.Groups["text"].Value);
             paragraph.Margin = new Thickness(12, 3, 0, 3);
-            paragraph.Inlines.InsertBefore(paragraph.Inlines.FirstInline, new Run(match.Groups["mark"].Value + " ")
+            var listMarker = new Run(match.Groups["mark"].Value + " ")
             {
                 Foreground = (Brush)Resources["AccentBrush"],
                 FontWeight = FontWeights.Bold
-            });
+            };
+            // A list marker can be followed by no body text (e.g. "- ").
+            // InsertBefore requires a valid existing inline in that case.
+            if (paragraph.Inlines.FirstInline is { } firstInline)
+                paragraph.Inlines.InsertBefore(firstInline, listMarker);
+            else
+                paragraph.Inlines.Add(listMarker);
             return paragraph;
         }
 
@@ -595,7 +601,16 @@ public partial class MainWindow : Window
     private Paragraph ParagraphWithInline(string text)
     {
         var paragraph = new Paragraph { Margin = new Thickness(0, 3, 0, 7) };
-        AddInlineMarkdown(paragraph, text);
+        try
+        {
+            AddInlineMarkdown(paragraph, text);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // A pathological Markdown line must not disable the whole live preview.
+            paragraph.Inlines.Clear();
+            paragraph.Inlines.Add(new Run(text));
+        }
         return paragraph;
     }
 
@@ -1370,6 +1385,8 @@ public partial class MainWindow : Window
         SchedulePreview();
         Editor.Focus();
         Editor.IsReadOnly = document.NeedsDiskLoad || document.IsLoading || document.LoadFailed;
+        if (document.LoadFailed)
+            StatusText.Text = "This session tab could not be restored. The editor is read-only to prevent data loss.";
         if (document.NeedsDiskLoad)
             _ = LoadRestoredDocumentAsync(document);
     }
@@ -1903,11 +1920,20 @@ public partial class MainWindow : Window
                 var diskAvailable = !document.IsDirty &&
                                     !string.IsNullOrWhiteSpace(document.FilePath) &&
                                     File.Exists(document.FilePath);
+                // A clean document is normally not duplicated in the session JSON.
+                // If its disk file has disappeared, don't offer an empty, writable
+                // placeholder that could overwrite the original path by accident.
+                var missingCleanFile = !document.IsDirty &&
+                                       !string.IsNullOrWhiteSpace(document.FilePath) &&
+                                       !File.Exists(document.FilePath) &&
+                                       string.IsNullOrEmpty(document.Content);
                 CreateDocument(diskAvailable ? string.Empty : document.Content,
-                    document.IsDirty || (!diskAvailable && document.FilePath is not null),
+                    document.IsDirty || (!diskAvailable && !missingCleanFile && document.FilePath is not null),
                     document.FilePath, false, document.DefaultExtension,
                     needsDiskLoad: diskAvailable,
                     encoding: DocumentSafety.RestoreEncoding(document.EncodingCodePage, document.EncodingHasBom));
+                if (missingCleanFile)
+                    documents[^1].LoadFailed = true;
             }
 
             var index = Math.Clamp(session.ActiveIndex, 0, documents.Count - 1);

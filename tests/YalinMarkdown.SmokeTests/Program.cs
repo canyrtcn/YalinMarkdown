@@ -105,6 +105,22 @@ try
     try { await DocumentSafety.ReadDocumentAsync(file); }
     catch (DecoderFallbackException) { invalidUtf8Rejected = true; }
     Check(invalidUtf8Rejected, "Unrecognized legacy text is rejected instead of silently damaged");
+
+    foreach (var codePage in new[] { 1201, 12000, 12001 })
+    {
+        var expected = "Yalın Markdown\r\nİçerik 😀";
+        DocumentSafety.AtomicWriteAllText(file, expected, DocumentSafety.RestoreEncoding(codePage, true));
+        var (actual, detected) = await DocumentSafety.ReadDocumentAsync(file);
+        Check(actual == expected && detected.CodePage == codePage && detected.GetPreamble().Length > 0,
+            $"UTF encoding with code page {codePage} and CRLF survives a round trip");
+    }
+
+    await using (var oversized = new FileStream(file, FileMode.Create, FileAccess.Write))
+        oversized.SetLength(DocumentSafety.MaxOpenFileBytes + 1);
+    var oversizeRejected = false;
+    try { await DocumentSafety.ReadDocumentAsync(file); }
+    catch (IOException) { oversizeRejected = true; }
+    Check(oversizeRejected, "Oversized files are rejected by the reader itself");
 }
 finally
 {

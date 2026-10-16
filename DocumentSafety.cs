@@ -64,6 +64,9 @@ internal static class DocumentSafety
     {
         using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read,
             FileShare.ReadWrite, bufferSize: 4096, useAsync: true);
+        // Enforce the same defensive limit for direct calls as for the file picker.
+        if (stream.Length > MaxOpenFileBytes)
+            throw new IOException("File exceeds the safe editing limit.");
         var marker = new byte[4];
         var read = 0;
         while (read < marker.Length)
@@ -86,7 +89,17 @@ internal static class DocumentSafety
                             ? RestoreEncoding(1201, true)
                             : RestoreEncoding(65001, false);
         using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
-        return (await reader.ReadToEndAsync(), encoding);
+        var content = new StringBuilder();
+        var buffer = new char[8192];
+        int charsRead;
+        while ((charsRead = await reader.ReadAsync(buffer.AsMemory())) != 0)
+        {
+            // Also bound allocations if the file grows after the size check.
+            if (content.Length > MaxOpenFileBytes - charsRead)
+                throw new IOException("File grew beyond the safe editing limit while being read.");
+            content.Append(buffer, 0, charsRead);
+        }
+        return (content.ToString(), encoding);
     }
 
     /// <summary>
