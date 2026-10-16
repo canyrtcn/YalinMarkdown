@@ -1,0 +1,40 @@
+# Build outputs and packaged releases
+[Bb]in/
+[Oo]bj/
+[Dd]ist*/
+[Bb]uild/
+[Rr]elease/
+*.pdb
+*.exe
+*.dll
+
+# Local sessions, logs, editor state, user configuration
+session.json
+session.*.json
+*.log
+*.user
+*.suo
+.vs/
+.idea/
+.vscode/
+*.local.json
+*.local.config
+.env
+.env.*
+!.env.example
+
+# Supplied archives, backups, SDK/cache data
+*.zip
+[Bb]ackup/
+[Bb]ackups/
+.appdata/
+.dotnet/
+.localappdata/
+.nuget/
+
+# Temporary and test files
+*.tmp
+*.bak
+*.orig
+.DS_Store
+Thumbs.db

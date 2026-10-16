@@ -1,0 +1,21 @@
+name: Windows build and smoke tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Check for private material
+        run: python tools/audit-source.py
+      - name: Run save and large-preview smoke tests
+        run: dotnet run --project tests/YalinMarkdown.SmokeTests/YalinMarkdown.SmokeTests.csproj -c Release
+      - name: Build WPF editor
+        run: dotnet build MarkdownEditor.csproj -c Release
