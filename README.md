@@ -1,8 +1,12 @@
 # YalinMarkdown
 
+[![Release](https://img.shields.io/badge/Release-v0.1.0-2ea44f?style=flat-square)](https://github.com/canyrtcn/YalinMarkdown/releases/tag/v0.1.0) ![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D4?style=flat-square) [![License](https://img.shields.io/badge/License-MIT-97CA00?style=flat-square)](LICENSE) ![.NET](https://img.shields.io/badge/.NET-10-512BD4?style=flat-square) ![UI](https://img.shields.io/badge/UI-WPF-444444?style=flat-square)
+
 **Fast, simple, and practical Markdown editing for Windows.**
 
 YalinMarkdown provides a clean workspace for writing Markdown, with an editor and a live preview side by side. Open several documents, make quick edits, and stay focused on the text.
+
+![YalinMarkdown application screenshot showing the editor and live preview](assets/screenshots/yalinmarkdown-preview.png)
 
 ## Features
 
