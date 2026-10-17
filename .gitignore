@@ -1,40 +1,88 @@
-# Build outputs and packaged releases
+# .NET and published application output
 [Bb]in/
 [Oo]bj/
-[Dd]ist*/
 [Bb]uild/
 [Rr]elease/
-*.pdb
+[Dd]ist*/
+[Aa]rtifacts/
 *.exe
 *.dll
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+*.apphost
 
-# Local sessions, logs, editor state, user configuration
+# IDE, user-specific configuration and caches
+.vs/
+.vscode/
+.idea/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.rsuser
+*.local.json
+*.local.config
+*.pubxml.user
+.nuget/
+.dotnet/
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Credentials, private keys and locally saved environment values
+.env
+.env.*
+*.env
+*secrets*.json
+*credentials*.json
+*token*.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# Personal app data, recovery, logs and transient databases
 session.json
 session.*.json
 *.log
-*.user
-*.suo
-.vs/
-.idea/
-.vscode/
-*.local.json
-*.local.config
-.env
-.env.*
-!.env.example
+*.trace
+*.dmp
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.cache
+.appdata/
+.localappdata/
 
-# Supplied archives, backups, SDK/cache data
+# Local notes, scratch data, generated results and archives
+notes/
+private/
+scratch/
+local/
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
 *.zip
+*.7z
+*.rar
 [Bb]ackup/
 [Bb]ackups/
-.appdata/
-.dotnet/
-.localappdata/
-.nuget/
-
-# Temporary and test files
-*.tmp
 *.bak
+*.old
 *.orig
+*.tmp
+*.swp
+*.swo
+*~
+
+# Operating-system files
 .DS_Store
 Thumbs.db
+Desktop.ini
