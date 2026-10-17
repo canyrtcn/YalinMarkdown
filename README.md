@@ -2,73 +2,58 @@
 
 **Fast, simple, and practical Markdown editing for Windows.**
 
-YalinMarkdown is a lightweight, offline editor built with WPF and .NET 10. It is designed for responsive everyday writing, with a focused interface and a live, side-by-side preview. Your files stay local—no account, cloud connection, or API key is required.
+YalinMarkdown provides a clean workspace for writing Markdown, with an editor and a live preview side by side. Open several documents, make quick edits, and stay focused on the text.
 
-## Highlights
+## Features
 
-- **Live Markdown preview:** write on the left and view formatted text on the right, without switching screens. Includes headings, emphasis, lists, code blocks, and links.
-- **Multiple documents:** open `.md`, `.markdown`, and `.txt` files in tabs. Tabs stay in place when selected and can be reordered by dragging.
-- **Editing essentials:** formatting actions, undo, font and size controls, zoom, and editor-only or preview-only modes.
-- **Dark and light themes:** a consistent interface with a shared accent color.
-- **Ten interface languages:** English, Turkish, German, French, Spanish, Italian, Chinese, Japanese, Korean, and Russian. English is the default on first launch; later selections are remembered.
-- **Live document statistics:** word and character counts, plus an approximate token estimate.
-- **Session recovery:** reopen tabs and recover locally stored unsaved work after restarting.
-- **Agent Tools:** inspect local agent instruction files and workspace Markdown with heuristic checks, section-level token estimates, approximate merged context, and keyword-based skill matching.
+- **Live preview:** see headings, lists, emphasis, links, and code blocks as you write.
+- **Tabbed editing:** open multiple `.md`, `.markdown`, and `.txt` files. Tabs remain in place when selected and can be reordered by dragging.
+- **Essential editing tools:** formatting actions, undo, font controls, zoom, and editor-only or preview-only views.
+- **Light and dark themes:** switch between two consistent interface styles.
+- **10 languages:** English, Turkish, German, French, Spanish, Italian, Chinese, Japanese, Korean, and Russian. English is the initial default.
+- **Live statistics:** word and character counts, plus approximate token estimates.
+- **Session recovery:** restore open tabs and unsaved edits after restarting.
+- **Agent Tools:** review local agent instruction files, estimate token usage, and inspect potential issues in a workspace.
 
-## Requirements
+## Download
 
-| Usage | Requirement |
-| --- | --- |
-| Build from source | Windows and the .NET 10 SDK |
-| Run a normal build | Windows and the .NET 10 Desktop Runtime |
-| Run a self-contained Windows x64 build | Windows x64; no separate .NET installation |
+Check [GitHub Releases](https://github.com/canyrtcn/YalinMarkdown/releases) for Windows builds. A **self-contained Windows x64** executable includes the required .NET runtime, so a separate .NET installation is not needed.
 
-### Build
+## Build from source
+
+On Windows, install the **.NET 10 SDK** and run:
 
 ```powershell
 dotnet build .\MarkdownEditor.csproj -c Release
 ```
 
-The framework-dependent executable is generated at `bin/Release/net10.0-windows/YalinMarkdown.exe`.
-
-### Publish a standalone executable
+To publish a standalone Windows x64 executable:
 
 ```powershell
 dotnet publish .\MarkdownEditor.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:IncludeNativeLibrariesForSelfExtract=true -o .\dist\win-x64-self-contained
 ```
 
-The self-contained executable is written to `dist/win-x64-self-contained/YalinMarkdown.exe`. It includes the .NET runtime, so its download size is significantly larger. Trimming is disabled for WPF compatibility.
+The standalone executable is larger because it includes the .NET runtime. Trimming is disabled for WPF compatibility.
 
 ## Agent Tools
 
-Open **Agent Tools** in the toolbar and choose a local workspace. You can analyze the active document or the workspace, review findings and estimated token usage, inspect a merged instruction view, and try a sample task against the skill-matching heuristics.
+Use **Agent Tools** to analyze an open document or a selected workspace, inspect findings and section-level token estimates, view an approximate merged instruction context, and try keyword-based skill matching.
 
-Agent Tools runs locally and produces **advisory results**, not security guarantees. Its merged context and skill scores are approximations; they do not reproduce the exact behavior or instruction precedence of a particular AI agent. Some technical finding descriptions remain in English.
+These checks are heuristic; they are not a full security audit or an exact simulation of an AI agent.
 
-## Performance and data safety
+## Current limitations
 
-- **File opening limit:** files larger than **8 MiB** are currently rejected to avoid excessive WPF editor memory or UI load.
-- **Bounded preview:** large documents are previewed up to **80,000 characters / 1,200 lines**. This affects only the preview; the underlying document is not truncated when saved.
-- **Responsive editing:** text statistics update as you type, and common line edits update only affected preview blocks. Larger structural changes can require a background-sliced rebuild on the UI thread.
-- **Safer file saves:** edits are written to a temporary file before replacing the destination.
-- **Text encoding:** UTF-8, UTF-16, and UTF-32 are supported, preserving recognized byte-order marks where present.
-- **Local session data:** document contents, document and workspace paths, preferences, and error logs may be saved under `%LOCALAPPDATA%\YalinMarkdown`. Do not share those files publicly.
+- Files larger than **8 MiB** cannot currently be opened.
+- For large documents, the preview is limited to **80,000 characters or 1,200 lines**. The editor retains the full document content for saving.
 
-YalinMarkdown does not upload document content. Before publishing bug reports or screenshots, check that they do not expose private filenames or document text.
-
-## Development
-
-Automated checks are kept in `tests/` and `tools/`, separate from application source files:
+## Development checks
 
 ```powershell
 python tools/audit-source.py
 python tools/check-ui.py
 dotnet run --project tests/YalinMarkdown.SmokeTests/YalinMarkdown.SmokeTests.csproj -c Release
-dotnet build .\MarkdownEditor.csproj -c Release
 ```
-
-GitHub Actions runs these checks on the repository. The source audit detects common secrets, machine-specific paths, and unexpected files, but automated scanning cannot guarantee that no sensitive material exists. Review every change before public release.
 
 ## License
 
-Released under the [MIT License](LICENSE). Maintained by [canyrtcn](https://github.com/canyrtcn).
+[MIT License](LICENSE) · Maintained by [canyrtcn](https://github.com/canyrtcn).
