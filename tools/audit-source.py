@@ -31,6 +31,7 @@ ALLOWED_FILES = {
     'README.md',
     'assets/app-icon.svg',
     'assets/app.ico',
+    'assets/screenshots/yalinmarkdown-preview.png',
     'tests/YalinMarkdown.SmokeTests/Program.cs',
     'tests/YalinMarkdown.SmokeTests/YalinMarkdown.SmokeTests.csproj',
     'tools/GenerateIcon.ps1',
@@ -82,8 +83,8 @@ for path in ROOT.rglob('*'):
     if relative not in ALLOWED_FILES:
         failures.append((relative, 'unexpected file in source directory'))
         continue
-    if relative == 'assets/app.ico':
-        # Binary icon is an intentional, checked-in application asset.
+    if relative in {'assets/app.ico', 'assets/screenshots/yalinmarkdown-preview.png'}:
+        # Binary icon and screenshot are intentional, checked-in application assets.
         continue
     try:
         body = path.read_text(encoding='utf-8')
