@@ -1,8 +1,8 @@
 # YalinMarkdown
 
-A lightweight, offline Markdown editor for Windows with a live, side-by-side preview.
+**Fast, simple, and practical Markdown editing for Windows.**
 
-YalinMarkdown is built with WPF and .NET 10. It focuses on straightforward text editing, predictable performance, and local files—no account, cloud connection, or API key is required.
+YalinMarkdown is a lightweight, offline editor built with WPF and .NET 10. It is designed for responsive everyday writing, with a focused interface and a live, side-by-side preview. Your files stay local—no account, cloud connection, or API key is required.
 
 ## Highlights
 
