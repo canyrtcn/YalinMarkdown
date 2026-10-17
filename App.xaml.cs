@@ -26,7 +26,7 @@ public partial class App : Application
 
             MessageBox.Show(
                 "An unexpected error occurred. Details were written to the application log.",
-                "Yalın Markdown",
+                "YalinMarkdown",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             e.Handled = true;

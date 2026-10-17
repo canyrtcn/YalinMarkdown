@@ -1,74 +1,86 @@
-# Yalın Markdown
+# YalinMarkdown
 
-Windows için sade ve hafif bir Markdown editörü.
+**YalinMarkdown** is a lightweight Markdown and plain-text editor for Windows, built with WPF and .NET 10. It keeps the source editor and a live Markdown preview side by side. No account, cloud service, API key, or third-party NuGet package is required.
 
-## Özellikler
+## Features
 
-- Yan yana Markdown editörü ve canlı önizleme (mevcut yerleşim korunur)
-- Birden fazla dosyayla çalışmak için sekmeler
-- `.md`, `.markdown` ve `.txt` dosyalarını açma ve sürükleyip bırakarak ekleme
-- Uygulama yeniden açıldığında sekmeleri ve kaydedilmemiş içerikleri geri yükleme
-- İngilizce, Türkçe, Almanca, Fransızca, İspanyolca, İtalyanca, Çince, Japonca, Korece ve Rusça arayüz
-- İlk açılışta İngilizce; sonraki açılışlarda son seçilen dili hatırlama
-- Yeni dosya, aç, kaydet ve farklı kaydet
-- Seçili metni kalın yapma
-- Yazı tipi değiştirme
-- Koyu ve açık tema
-- Kelime ve karakter sayacı
-- Agent çalışma alanı analizi (`AGENTS.md`, `SOUL.md`, `SKILL.md` ve diğer talimat dosyaları)
-- Belge ve bölüm bazında yaklaşık token maliyeti
-- Olası gizli bilgi, tehlikeli komut, çelişki, tekrar ve bozuk yol kontrolleri
-- Yaklaşık birleşik agent bağlamı önizlemesi
-- Görev metnine göre skill tetiklenme simülasyonu
-- Harici NuGet paketi olmadan hafif WPF uygulaması
+- **Live split view:** edit Markdown on the left and see the rendered preview on the right. The layout stays intact; document tabs keep their positions when you select another tab.
+- **Tabbed editing:** open multiple `.md`, `.markdown`, and `.txt` files, drag and drop files, and manually reorder tabs by dragging them.
+- **Editing tools:** save, Save As, undo, inline and block formatting, font choices, zoom, and optional editor-only or preview-only viewing.
+- **Themes:** dark and light appearances with consistent accent colors in the toolbar and menus.
+- **Languages:** English (default on first launch), Turkish, German, French, Spanish, Italian, Chinese, Japanese, Korean, and Russian. Your chosen language is restored with the local session.
+- **Live metrics:** word count, character count, and an approximate token estimate for Markdown documents.
+- **Local session recovery:** restores tabs and unsaved changes after restart. No document is uploaded to any server.
+- **Agent Tools:** heuristic checks for instruction files, approximate per-section token cost, suspicious command/secret patterns, duplicate or conflicting instructions, an approximate merged instruction context, and skill-description matching. These results are advisory, **not** a security guarantee or a faithful simulation of any particular agent runtime.
 
-## Agent Araçları
+## System requirements
 
-1. Araç çubuğundaki `Agent Tools` düğmesini açın.
-2. `Choose Workspace` ile agent dosyalarının bulunduğu proje klasörünü seçin.
-3. `Analyze Active`, açık belgeyi; `Analyze Workspace`, çalışma alanındaki Markdown dosyalarını analiz eder.
-4. `Findings` sekmesindeki bir sonuca çift tıklayarak ilgili dosya ve satıra gidin.
-5. `Sections` sekmesinde en fazla token kullanan bölümleri inceleyin.
-6. `Merged Context` sekmesinde etkin dosya için yaklaşık talimat birleşimini görün.
-7. `Skill Match` sekmesine örnek görev yazıp olası `SKILL.md` eşleşmelerini test edin.
+- Windows 10/11 (64-bit Windows recommended).
+- **To build:** .NET 10 SDK with the Windows Desktop/WPF tooling.
+- **To run a normal framework-dependent build:** .NET 10 **Desktop Runtime** (not the SDK).
+- **To run a self-contained release:** no separate .NET installation is required. A self-contained single-file executable is larger because it contains the runtime.
 
-Analizler hızlı ve sezgiseldir. Gerçek bağlam yükleme ve skill tetikleme davranışı kullanılan agent'a göre değişebilir.
-
-## Kısayollar
-
-- `Ctrl+N`: Yeni belge
-- `Ctrl+O`: Dosya aç
-- `Ctrl+S`: Kaydet
-- `Ctrl+Shift+S`: Farklı kaydet
-- `Ctrl+B`: Kalın
-
-## Derleme
+## Build from source
 
 ```powershell
-dotnet build -c Release
+dotnet build .\MarkdownEditor.csproj -c Release
 ```
 
-Çalıştırılabilir dosya: `bin/Release/net10.0-windows/YalinMarkdown.exe`
+Output: `bin/Release/net10.0-windows/YalinMarkdown.exe` (framework-dependent).
 
-## Büyük dosyalar ve veri güvenliği
+To publish an independent Windows x64 executable:
 
-Bu sürümde canlı önizleme, büyük belgelerde en fazla ilk 80.000 karakteri / 1.200 satırı gösterir; çok uzun satırlar da önizlemede kısaltılır. **Belgenin kaynak metni kısaltılmaz** ve tamamı kaydedilir. Önizlemedeki bilgilendirme, görünümün kısmi olduğunu belirtir.
+```powershell
+dotnet publish .\MarkdownEditor.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -p:IncludeNativeLibrariesForSelfExtract=true -o .\dist\win-x64-self-contained
+```
 
-- Editörün WPF `TextBox` sınırları nedeniyle **8 MiB üzerindeki dosyalar kontrollü olarak reddedilir**. Bu sınıra kadar da donanım ve belge yapısına bağlı gecikmeler yaşanabilir; sınırsız büyüklükte dosya desteği iddia edilmez.
-- Dosya açma asenkrondur. Kelime/karakter/yaklaşık token göstergeleri **her düzenlemede anında** artımlı güncellenir; tam metin taraması olağan tek değişikliklerde tekrarlanmaz.
-- Önizlemede normal satır ekleme/silme ve içerik düzenleme yalnızca değişen blokları yeniler. Fenced-code içi tek satır değişiklikleri sadece ilgili kod bloğunu günceller. Karmaşık Markdown yapısal değişikliklerinde önizleme, arayüzü uzun süre bloke etmemek için dispatcher üzerinde 40 satırlık küçük dilimler hâlinde yeniden hazırlanır; bu durumlarda güncelleme kısa süre gecikebilir.
-- Mevcut bir dosyaya kaydetme, aynı klasörde geçici dosya üzerinden `File.Replace` kullanır. Dosya sistemi atomik değiştirmeyi desteklemiyorsa kaydetme hata verir ve orijinal dosyanın üzerine doğrudan yazılmaz.
-- UTF-8, UTF-16 ve UTF-32 metin dosyaları desteklenir; varsa BOM korunur. Tanınmayan ve bozuk kodlamalı dosyalar, veriyi sessizce dönüştürmemek için açılmaz.
-- Oturum kurtarma dosyası yalnızca kullanıcının yerel uygulama verisi klasöründe yazılır. Kaydedilmemiş belgeler yerel oturum yedeğinde tutulur, temiz/kaydedilmiş belgeler yeniden diskten okunur. Oturumda dosya yolları ve kaydedilmemiş belge içerikleri yer alabilir; **oturum JSON'unu paylaşmayın**.
+Output: `dist/win-x64-self-contained/YalinMarkdown.exe`. WPF trimming is disabled to avoid compatibility problems. A .NET-free installation test is recommended before publishing binaries to end users.
 
-## Geliştirme ve test
+## Agent Tools
 
-Windows 11 ve .NET 10 SDK ile:
+Select **Agent Tools** in the toolbar, then:
+
+1. Select a local workspace with **Choose Workspace**.
+2. Run **Analyze Active** for the current document, or **Analyze Workspace** for Markdown files in the selected folder tree.
+3. Review **Findings**, **Sections**, and **Files**; double-click findings or paths to open their source and jump to a line where available.
+4. Inspect **Merged Context**, an *approximation* based on common agent instruction files, not the exact precedence or content of a specific AI tool.
+5. Enter an example task in **Skill Match** to see simple keyword-based skill scores.
+
+Scanning remains local. Common build, dependency, hidden, and backup folders are skipped. File-size and result limits protect the interface; incomplete or skipped analysis is not equivalent to a clean security audit. Some diagnostic output is in English, including technical finding descriptions.
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+N` | New document |
+| `Ctrl+O` | Open document |
+| `Ctrl+S` | Save |
+| `Ctrl+Shift+S` | Save As |
+| `Ctrl+B` | Bold selected text |
+| `Ctrl+Z` | Undo |
+
+## Large files and data safety
+
+- **8 MiB maximum file size for opening:** the current WPF `TextBox` editor intentionally rejects larger files to avoid freezes. Files up to that limit may still behave differently depending on their contents and hardware.
+- **Bounded preview:** for large documents the preview displays up to **80,000 characters / 1,200 lines** and clips unusually long lines. The underlying editor text is **not** truncated, and the complete source is saved.
+- **Incremental updates:** live counters update with every edit, and common line edits update only the affected preview blocks. Some structural changes require a sliced full preview rebuild.
+- **Safer saves:** a temporary file is written in the same directory and used to replace an existing destination, rather than truncating it in place. Save errors are reported.
+- **Text encodings:** UTF-8, UTF-16, and UTF-32 are supported with BOM preservation where present. Invalid unrecognized encodings are rejected instead of silently rewritten.
+- **Local recovery:** unsaved content, filenames, workspace paths, and language/theme settings may be stored in `%LOCALAPPDATA%\YalinMarkdown\session.json`. **Do not publish or share your session file.**
+
+## Development checks
+
+Run these on Windows with the .NET 10 SDK:
 
 ```powershell
 python tools/audit-source.py
+python tools/check-ui.py
 dotnet run --project tests/YalinMarkdown.SmokeTests/YalinMarkdown.SmokeTests.csproj -c Release
-dotnet build MarkdownEditor.csproj -c Release
+dotnet build .\MarkdownEditor.csproj -c Release
 ```
 
-`tools/audit-source.py` kaynak ağacında yaygın kişisel yol, e-posta ve anahtar desenlerini denetler. Kapsamı sınırlı bir korumadır; yayımlama öncesinde ayrıca manuel inceleme gerekir. Derlenmiş EXE, PDB, log, oturum, yedek, makineye özgü konfigürasyonlar ve ZIP arşivleri depoya eklenmez.
+The included privacy scanner detects common credentials and personal-path patterns in proposed source files, but no pattern-based scanner can guarantee that a repository contains no sensitive information. Review changes before making the repository public. Compiled executables, personal sessions, logs, user-specific configuration, and archives are excluded from source control.
+
+## Project
+
+Author's GitHub: [canyrtcn](https://github.com/canyrtcn). The footer's GitHub link opens this profile in your default browser. This project is currently being prepared for a public release; no license is granted by this README.

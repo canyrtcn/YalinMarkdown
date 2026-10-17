@@ -8,5 +8,8 @@
   <ItemGroup>
     <Compile Include="../../DocumentSafety.cs" Link="DocumentSafety.cs" />
     <Compile Include="../../LiveTextMetrics.cs" Link="LiveTextMetrics.cs" />
+    <Compile Include="../../AgentAnalysis.cs" Link="AgentAnalysis.cs" />
+    <Compile Include="../../Localization.cs" Link="Localization.cs" />
+    <Compile Include="../../AgentPanelLocalization.cs" Link="AgentPanelLocalization.cs" />
   </ItemGroup>
 </Project>

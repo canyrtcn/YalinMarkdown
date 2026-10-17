@@ -105,7 +105,6 @@ try
     try { await DocumentSafety.ReadDocumentAsync(file); }
     catch (DecoderFallbackException) { invalidUtf8Rejected = true; }
     Check(invalidUtf8Rejected, "Unrecognized legacy text is rejected instead of silently damaged");
-
     foreach (var codePage in new[] { 1201, 12000, 12001 })
     {
         var expected = "Yalın Markdown\r\nİçerik 😀";
@@ -125,6 +124,60 @@ try
 finally
 {
     Directory.Delete(tempDir, recursive: true);
+}
+
+// Translation availability and brand consistency across every selectable language.
+Check(Localization.Languages.Length == 10 && Localization.Languages[0].Code == "en",
+    "English is the default and all ten languages are selectable");
+foreach (var language in Localization.Languages)
+{
+    var core = Localization.Get(language.Code);
+    var panel = AgentPanelLocalization.Get(language.Code);
+    Check(core.AppName == "YalinMarkdown" && !string.IsNullOrWhiteSpace(core.Format) &&
+          !string.IsNullOrWhiteSpace(core.Untitled) && !string.IsNullOrWhiteSpace(panel.Tools) &&
+          !string.IsNullOrWhiteSpace(panel.SkillMatch) && !string.IsNullOrWhiteSpace(panel.ChooseWorkspace),
+          $"Localization is complete for {language.Code}");
+}
+
+// Agent Tool checks: frontmatter must recognize separate delimiter lines, including CRLF.
+var validSkill = "---\r\nname: log-analyzer\r\ndescription: Analyze system logs for errors and anomalies.\r\n---\r\n# Usage\r\nDetails";
+Check(AgentAnalyzer.ExtractFrontmatter(validSkill)?.Contains("name: log-analyzer") == true,
+    "CRLF YAML frontmatter is recognized");
+Check(AgentAnalyzer.ExtractFrontmatter("---not-a-fence\nname: wrong\n---") is null,
+    "Malformed frontmatter fence is rejected");
+var validAnalysis = AgentAnalyzer.AnalyzeDocument("SKILL.md", validSkill);
+Check(!validAnalysis.Findings.Any(f => f.Severity == FindingSeverity.Critical && f.Category == "Skill"),
+    "Valid SKILL.md frontmatter has no critical metadata finding");
+var badAnalysis = AgentAnalyzer.AnalyzeDocument("SKILL.md", "---\nname: bad\n---trailing\nbody");
+Check(badAnalysis.Findings.Any(f => f.Severity == FindingSeverity.Critical && f.Category == "Skill"),
+    "Malformed SKILL.md frontmatter is flagged");
+
+var agentDir = Path.Combine(Path.GetTempPath(), "YalinMarkdownAgentTests-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(agentDir);
+try
+{
+    var nested = Path.Combine(agentDir, "docs");
+    Directory.CreateDirectory(nested);
+    await File.WriteAllTextAsync(Path.Combine(nested, "target.md"), "# Document");
+    var instructionPath = Path.Combine(nested, "AGENTS.md");
+    var instruction = "Use `target.md` for documentation. Test with dotnet test. Install and review security.";
+    await File.WriteAllTextAsync(instructionPath, instruction);
+    var analysis = AgentAnalyzer.AnalyzeDocument("AGENTS.md", instruction, instructionPath, agentDir);
+    Check(!analysis.Findings.Any(f => f.Category == "Path"),
+        "Nested relative file paths are resolved from the source document");
+    var skillsDir = Path.Combine(agentDir, "skills", "log-analyzer");
+    Directory.CreateDirectory(skillsDir);
+    var skillPath = Path.Combine(skillsDir, "SKILL.md");
+    await File.WriteAllTextAsync(skillPath, validSkill);
+    var workspace = AgentAnalyzer.AnalyzeWorkspace(agentDir, instructionPath);
+    Check(workspace.AgentFiles.Count == 2 && workspace.MergedInstructions.Contains("AGENTS.md"),
+        "Workspace analysis locates instruction and skill files");
+    Check(AgentAnalyzer.MatchSkills(agentDir, "Analyze errors in system logs").Any(m => m.Name == "log-analyzer"),
+        "Skill matching uses parsed metadata and task keyword overlap");
+}
+finally
+{
+    Directory.Delete(agentDir, recursive: true);
 }
 
 Console.WriteLine("All YalinMarkdown smoke tests passed.");

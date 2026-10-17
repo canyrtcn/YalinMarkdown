@@ -55,6 +55,8 @@ internal sealed record SkillMatch(string FilePath, string Name, int Score, strin
 internal static class AgentAnalyzer
 {
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(200);
+    private const long MaxAgentFileBytes = 2L * 1024 * 1024;
+    private const int MaxMergedContextCharacters = 250_000;
     private static readonly string[] AgentFileNames =
     [
         "AGENTS.md", "AGENTS.override.md", "SOUL.md", "SKILL.md", "CLAUDE.md",
@@ -137,13 +139,13 @@ internal static class AgentAnalyzer
             return matches;
 
         foreach (var file in EnumerateMarkdownFiles(rootPath)
-                     .Where(file => Path.GetFileName(file).Equals("SKILL.md", StringComparison.OrdinalIgnoreCase)))
+                     .Where(file => Path.GetFileName(file).Equals("SKILL.md", StringComparison.OrdinalIgnoreCase))
+                     .Take(2_000))
         {
             try
             {
                 var content = File.ReadAllText(file);
-                var end = content.IndexOf("\n---", 3, StringComparison.Ordinal);
-                var frontmatter = content.StartsWith("---", StringComparison.Ordinal) && end > 0 ? content[3..end] : string.Empty;
+                var frontmatter = ExtractFrontmatter(content) ?? string.Empty;
                 var name = GetFrontmatterValue(frontmatter, "name") ?? Path.GetFileName(Path.GetDirectoryName(file));
                 var description = GetFrontmatterValue(frontmatter, "description") ?? string.Empty;
                 var skillWords = GetMeaningfulWords($"{name} {description}");
@@ -198,7 +200,9 @@ internal static class AgentAnalyzer
                 var canAnalyze = false;
                 try
                 {
-                    canAnalyze = new FileInfo(file).Length <= 2 * 1024 * 1024;
+                    var info = new FileInfo(file);
+                    canAnalyze = info.Length <= MaxAgentFileBytes &&
+                                 (info.Attributes & FileAttributes.ReparsePoint) == 0;
                 }
                 catch
                 {
@@ -339,25 +343,40 @@ internal static class AgentAnalyzer
     {
         if (workspaceRoot is null)
             return;
-        foreach (Match match in PathPattern.Matches(content))
+        try
         {
-            var path = match.Groups["path"].Value;
-            if (path.Contains('*') || Uri.TryCreate(path, UriKind.Absolute, out _))
-                continue;
-            try
+            var sourceDirectory = filePath is not null && IsWithinRoot(workspaceRoot, filePath)
+                ? Path.GetDirectoryName(filePath) ?? workspaceRoot : workspaceRoot;
+            foreach (Match match in PathPattern.Matches(content))
             {
-                var candidate = Path.GetFullPath(Path.Combine(workspaceRoot, path.Replace('/', Path.DirectorySeparatorChar)));
-                if (!File.Exists(candidate) && !Directory.Exists(candidate))
+                var path = match.Groups["path"].Value;
+                if (path.Contains('*') || Uri.TryCreate(path, UriKind.Absolute, out _))
+                    continue;
+                try
                 {
-                    result.Findings.Add(new AgentFinding(FindingSeverity.Info, "Path",
-                        $"Referenced path does not exist: {path}", filePath, GetLine(content, match.Index)));
+                    var relative = path.Replace('/', Path.DirectorySeparatorChar)
+                                       .Replace('\\', Path.DirectorySeparatorChar);
+                    var fromDocument = Path.GetFullPath(Path.Combine(sourceDirectory, relative));
+                    var fromWorkspace = Path.GetFullPath(Path.Combine(workspaceRoot, relative));
+                    var existsInWorkspace = (IsWithinRoot(workspaceRoot, fromDocument) && File.Exists(fromDocument)) ||
+                        (IsWithinRoot(workspaceRoot, fromWorkspace) && File.Exists(fromWorkspace)) ||
+                        (IsWithinRoot(workspaceRoot, fromDocument) && Directory.Exists(fromDocument)) ||
+                        (IsWithinRoot(workspaceRoot, fromWorkspace) && Directory.Exists(fromWorkspace));
+                    if (!existsInWorkspace)
+                        result.Findings.Add(new AgentFinding(FindingSeverity.Info, "Path",
+                            $"Referenced workspace path could not be resolved: {path}", filePath, GetLine(content, match.Index)));
+                }
+                catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+                {
+                    result.Findings.Add(new AgentFinding(FindingSeverity.Warning, "Path",
+                        $"Referenced path is invalid: {path}", filePath, GetLine(content, match.Index)));
                 }
             }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-            {
-                result.Findings.Add(new AgentFinding(FindingSeverity.Warning, "Path",
-                    $"Referenced path is invalid: {path}", filePath, GetLine(content, match.Index)));
-            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            result.Findings.Add(new AgentFinding(FindingSeverity.Warning, "Path",
+                "Path checks exceeded their time limit.", filePath));
         }
     }
 
@@ -388,20 +407,13 @@ internal static class AgentAnalyzer
 
     private static void AnalyzeSkill(string content, string? filePath, AgentAnalysisResult result)
     {
-        if (!content.StartsWith("---", StringComparison.Ordinal))
+        var frontmatter = ExtractFrontmatter(content);
+        if (frontmatter is null)
         {
             result.Findings.Add(new AgentFinding(FindingSeverity.Critical, "Skill",
-                "SKILL.md must begin with YAML frontmatter.", filePath, 1));
+                "SKILL.md needs opening and closing YAML frontmatter fences on separate lines.", filePath, 1));
             return;
         }
-        var end = content.IndexOf("\n---", 3, StringComparison.Ordinal);
-        if (end < 0)
-        {
-            result.Findings.Add(new AgentFinding(FindingSeverity.Critical, "Skill",
-                "YAML frontmatter is not closed.", filePath, 1));
-            return;
-        }
-        var frontmatter = content[3..end];
         var name = GetFrontmatterValue(frontmatter, "name");
         var description = GetFrontmatterValue(frontmatter, "description");
         if (string.IsNullOrWhiteSpace(name))
@@ -420,11 +432,28 @@ internal static class AgentAnalyzer
             result.Findings.Add(new AgentFinding(FindingSeverity.Warning, "Skill", "Skill name does not match its directory name.", filePath, 1));
     }
 
+    internal static string? ExtractFrontmatter(string content)
+    {
+        // Recognize actual YAML fence lines and CRLF/LF rather than any "\n---" substring.
+        using var reader = new StringReader(content.TrimStart('\uFEFF'));
+        if (reader.ReadLine()?.Trim() != "---")
+            return null;
+        var frontmatter = new StringBuilder();
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            if (line.Trim() == "---")
+                return frontmatter.ToString();
+            frontmatter.AppendLine(line);
+        }
+        return null;
+    }
+
     private static string? GetFrontmatterValue(string frontmatter, string key)
     {
         foreach (var line in frontmatter.Replace("\r\n", "\n").Split('\n'))
         {
-            if (line.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase))
+            if (line.TrimStart().StartsWith(key + ":", StringComparison.OrdinalIgnoreCase))
                 return line[(line.IndexOf(':') + 1)..].Trim().Trim('"', '\'');
         }
         return null;
@@ -451,8 +480,22 @@ internal static class AgentAnalyzer
         string content, Regex pattern, FindingSeverity severity, string category, string message,
         string? filePath, AgentAnalysisResult result)
     {
-        foreach (Match match in pattern.Matches(content))
-            result.Findings.Add(new AgentFinding(severity, category, message, filePath, GetLine(content, match.Index)));
+        var position = 0;
+        var line = 1;
+        try
+        {
+            foreach (Match match in pattern.Matches(content))
+            {
+                for (; position < match.Index; position++)
+                    if (content[position] == '\n') line++;
+                result.Findings.Add(new AgentFinding(severity, category, message, filePath, line));
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            result.Findings.Add(new AgentFinding(FindingSeverity.Warning, "Analysis",
+                $"The {category.ToLowerInvariant()} pattern check exceeded its time limit.", filePath));
+        }
     }
 
     private static string NormalizeInstruction(string line)
@@ -510,9 +553,9 @@ internal static class AgentAnalyzer
             {
                 try
                 {
-                    var content = File.ReadAllText(skill);
-                    var end = content.IndexOf("\n---", 3, StringComparison.Ordinal);
-                    var frontmatter = end > 0 ? content[3..end] : string.Empty;
+                    var content = new FileInfo(skill).Length <= MaxAgentFileBytes
+                        ? File.ReadAllText(skill) : string.Empty;
+                    var frontmatter = ExtractFrontmatter(content) ?? string.Empty;
                     builder.AppendLine($"- `{Path.GetRelativePath(rootPath, skill)}` — {GetFrontmatterValue(frontmatter, "description") ?? "No description"}");
                 }
                 catch
@@ -521,6 +564,9 @@ internal static class AgentAnalyzer
                 }
             }
         }
+        if (builder.Length > MaxMergedContextCharacters)
+            return builder.ToString(0, MaxMergedContextCharacters) +
+                   "\n\n[Approximate merged context truncated for performance.]";
         return builder.ToString();
     }
 
@@ -546,7 +592,11 @@ internal static class AgentAnalyzer
         try
         {
             builder.AppendLine($"## {Path.GetRelativePath(rootPath, filePath)}");
-            builder.AppendLine(File.ReadAllText(filePath));
+            if (new FileInfo(filePath).Length > MaxAgentFileBytes ||
+                builder.Length > MaxMergedContextCharacters)
+                builder.AppendLine("> File omitted: approximate context size limit.");
+            else
+                builder.AppendLine(File.ReadAllText(filePath));
             builder.AppendLine();
         }
         catch

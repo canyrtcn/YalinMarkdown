@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Globalization;
+using System.Diagnostics;
+using System.Windows.Navigation;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -46,6 +48,10 @@ public partial class MainWindow : Window
     private string currentLanguage = "en";
     private Translation currentTranslation = Localization.Get("en");
     private Translation T => currentTranslation;
+    private AgentPanelTranslation AgentUi => AgentPanelLocalization.Get(currentLanguage);
+    private int activeAnalysisGeneration;
+    private int workspaceAnalysisGeneration;
+    private int skillMatchGeneration;
     // Live preview retains the side-by-side layout. Ordinary one-line edits replace
     // only their affected block; structural changes rebuild in bounded UI slices.
     private int previewGeneration;
@@ -87,7 +93,7 @@ public partial class MainWindow : Window
         if (!RestoreSession())
         {
             CreateDocument(
-                "# Yalın Markdown\n\nEdit your Markdown file here.\n\n- Fast\n- Simple\n- Live preview\n\n**Start writing.**",
+                "# YalinMarkdown\n\nEdit your Markdown file here.\n\n- Fast\n- Simple\n- Live preview\n\n**Start writing.**",
                 false);
         }
 
@@ -149,6 +155,22 @@ public partial class MainWindow : Window
         SaveAsButton.Content = T.SaveAs;
         UndoButton.Content = T.Undo;
         UndoButton.ToolTip = T.UndoTip;
+        LanguageLabel.Text = AgentUi.Language;
+        AgentToolsButton.Content = AgentUi.Tools;
+        AgentToolsHeaderText.Text = AgentUi.Tools.ToUpper(CultureInfo.CurrentCulture);
+        ChooseWorkspaceButton.Content = AgentUi.ChooseWorkspace;
+        AnalyzeActiveButton.Content = AgentUi.AnalyzeActive;
+        AnalyzeWorkspaceButton.Content = AgentUi.AnalyzeWorkspace;
+        AgentOverviewTab.Header = AgentUi.Overview;
+        AgentFindingsTab.Header = AgentUi.Findings;
+        AgentSectionsTab.Header = AgentUi.Sections;
+        AgentFilesTab.Header = AgentUi.Files;
+        AgentMergedContextTab.Header = AgentUi.MergedContext;
+        AgentSkillMatchTab.Header = AgentUi.SkillMatch;
+        SimulateSkillTriggerButton.Content = AgentUi.Simulate;
+        SkillTaskText.ToolTip = AgentUi.ExampleTask;
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
+            WorkspacePathText.Text = AgentUi.NoWorkspace;
         FormatLabel.Text = T.Format;
         FontLabel.Text = T.Font;
         SizeLabel.Text = T.Size;
@@ -259,6 +281,7 @@ public partial class MainWindow : Window
         if (suppressChanges)
             return;
 
+        ++activeAnalysisGeneration; // Invalidate any in-flight analysis of the old content.
         if (activeDocument is not null && !activeDocument.IsDirty)
         {
             activeDocument.IsDirty = true;
@@ -566,8 +589,6 @@ public partial class MainWindow : Window
                 Foreground = (Brush)Resources["AccentBrush"],
                 FontWeight = FontWeights.Bold
             };
-            // A list marker can be followed by no body text (e.g. "- ").
-            // InsertBefore requires a valid existing inline in that case.
             if (paragraph.Inlines.FirstInline is { } firstInline)
                 paragraph.Inlines.InsertBefore(firstInline, listMarker);
             else
@@ -607,7 +628,6 @@ public partial class MainWindow : Window
         }
         catch (RegexMatchTimeoutException)
         {
-            // A pathological Markdown line must not disable the whole live preview.
             paragraph.Inlines.Clear();
             paragraph.Inlines.Add(new Run(text));
         }
@@ -658,11 +678,13 @@ public partial class MainWindow : Window
                     // Never turn file:, javascript: or custom schemes into clickable links.
                     if (uri.IsAbsoluteUri && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
                     {
-                        paragraph.Inlines.Add(new Hyperlink(new Run(token[1..end]))
+                        var link = new Hyperlink(new Run(token[1..end]))
                         {
                             NavigateUri = uri,
                             Foreground = (Brush)Resources["AccentBrush"]
-                        });
+                        };
+                        link.RequestNavigate += PreviewLink_RequestNavigate;
+                        paragraph.Inlines.Add(link);
                     }
                     else
                     {
@@ -818,10 +840,12 @@ public partial class MainWindow : Window
             OpenFile(file);
     }
 
-    private async void OpenFile(string filePath)
+    private async void OpenFile(string filePath) => await OpenFileAsync(filePath);
+
+    private async Task<DocumentTab?> OpenFileAsync(string filePath)
     {
         if (!IsSupportedFile(filePath))
-            return;
+            return null;
 
         string? fullPath = null;
         try
@@ -833,10 +857,14 @@ public partial class MainWindow : Window
             if (existing is not null)
             {
                 DocumentTabs.SelectedItem = existing.Tab;
-                return;
+                if (existing.NeedsDiskLoad)
+                    existing.LoadTask ??= LoadRestoredDocumentAsync(existing);
+                if (existing.LoadTask is { } pendingLoad)
+                    await pendingLoad;
+                return existing.LoadFailed ? null : existing;
             }
             if (!loadingFiles.Add(fullPath))
-                return;
+                return null;
 
             var size = new FileInfo(fullPath).Length;
             if (size > DocumentSafety.MaxOpenFileBytes)
@@ -845,17 +873,19 @@ public partial class MainWindow : Window
                     $"This file is larger than the {DocumentSafety.MaxOpenFileBytes / (1024 * 1024)} MiB safe editing limit. " +
                     "It was not opened to avoid an unresponsive WPF editor.",
                     T.AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
+                return null;
             }
 
             StatusText.Text = "Opening file...";
             var (content, encoding) = await DocumentSafety.ReadDocumentAsync(fullPath);
             CreateDocument(content, false, fullPath, encoding: encoding);
             StatusText.Text = T.FileOpened;
+            return activeDocument;
         }
         catch (Exception ex)
         {
             MessageBox.Show(string.Format(T.OpenFailed, ex.Message), T.Error, MessageBoxButton.OK, MessageBoxImage.Error);
+            return null;
         }
         finally
         {
@@ -1040,6 +1070,29 @@ public partial class MainWindow : Window
         }
     }
 
+    private void GitHubProfileButton_Click(object sender, RoutedEventArgs e) =>
+        OpenExternalLink(new Uri("https://github.com/canyrtcn"));
+
+    private void PreviewLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        e.Handled = true;
+        OpenExternalLink(e.Uri);
+    }
+
+    private void OpenExternalLink(Uri uri)
+    {
+        if (!uri.IsAbsoluteUri || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, T.Error, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void ThemeButton_Click(object sender, RoutedEventArgs e)
     {
         isDark = !isDark;
@@ -1120,6 +1173,7 @@ public partial class MainWindow : Window
         if (activeDocument is null)
             return;
 
+        var generation = ++activeAnalysisGeneration;
         var document = activeDocument;
         var text = Editor.Text;
         if (workspaceRoot is null && document.FilePath is not null)
@@ -1131,11 +1185,11 @@ public partial class MainWindow : Window
         var fileName = GetDisplayName(document);
         var filePath = document.FilePath;
         var root = workspaceRoot;
-        AgentSummaryText.Text = "Analyzing document...";
+        AgentSummaryText.Text = AgentUi.AnalyzingDocument;
         try
         {
             var result = await Task.Run(() => AgentAnalyzer.AnalyzeDocument(fileName, text, filePath, root));
-            if (activeDocument != document)
+            if (generation != activeAnalysisGeneration || activeDocument != document || Editor.Text != text)
                 return;
             AgentFindingsList.ItemsSource = result.Findings;
             SectionTokensList.ItemsSource = result.Sections.OrderByDescending(section => section.Tokens).ToList();
@@ -1143,7 +1197,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AgentSummaryText.Text = $"Analysis could not finish: {ex.Message}";
+            if (generation == activeAnalysisGeneration && activeDocument == document)
+                AgentSummaryText.Text = $"Analysis could not finish: {ex.Message}";
         }
     }
 
@@ -1151,18 +1206,20 @@ public partial class MainWindow : Window
     {
         if (workspaceRoot is null || !Directory.Exists(workspaceRoot))
         {
-            AgentSummaryText.Text = "Choose a workspace folder first.";
+            AgentSummaryText.Text = AgentUi.ChooseWorkspaceFirst;
             return;
         }
 
+        var generation = ++workspaceAnalysisGeneration;
         WorkspacePathText.Text = workspaceRoot;
-        AgentSummaryText.Text = "Analyzing workspace...";
+        AgentSummaryText.Text = AgentUi.AnalyzingWorkspace;
         var root = workspaceRoot;
         var activePath = activeDocument?.FilePath;
         try
         {
             var result = await Task.Run(() => AgentAnalyzer.AnalyzeWorkspace(root, activePath));
-            if (!string.Equals(workspaceRoot, root, StringComparison.OrdinalIgnoreCase))
+            if (generation != workspaceAnalysisGeneration ||
+                !string.Equals(workspaceRoot, root, StringComparison.OrdinalIgnoreCase))
                 return;
             AgentFindingsList.ItemsSource = result.Findings;
             AgentFilesList.ItemsSource = result.AgentFiles
@@ -1173,7 +1230,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AgentSummaryText.Text = $"Workspace analysis could not finish: {ex.Message}";
+            if (generation == workspaceAnalysisGeneration)
+                AgentSummaryText.Text = $"Workspace analysis could not finish: {ex.Message}";
         }
     }
 
@@ -1181,27 +1239,30 @@ public partial class MainWindow : Window
     {
         if (workspaceRoot is null || !Directory.Exists(workspaceRoot))
         {
-            AgentSummaryText.Text = "Choose a workspace folder first.";
+            AgentSummaryText.Text = AgentUi.ChooseWorkspaceFirst;
             return;
         }
         var task = SkillTaskText.Text.Trim();
         if (task.Length == 0)
             return;
 
-        SkillMatchesList.ItemsSource = new[] { "Analyzing skill descriptions..." };
+        var generation = ++skillMatchGeneration;
+        SkillMatchesList.ItemsSource = new[] { AgentUi.AnalyzingSkills };
         var root = workspaceRoot;
         try
         {
             var matches = await Task.Run(() => AgentAnalyzer.MatchSkills(root, task));
-            if (!string.Equals(workspaceRoot, root, StringComparison.OrdinalIgnoreCase))
+            if (generation != skillMatchGeneration || SkillTaskText.Text.Trim() != task ||
+                !string.Equals(workspaceRoot, root, StringComparison.OrdinalIgnoreCase))
                 return;
             SkillMatchesList.ItemsSource = matches.Count > 0
                 ? matches
-                : new List<SkillMatch> { new(string.Empty, "No likely skill match", 0, "Descriptions may be too vague or no skill matches this task.") };
+                : new List<SkillMatch> { new(string.Empty, AgentUi.NoSkillMatch, 0, string.Empty) };
         }
         catch (Exception ex)
         {
-            SkillMatchesList.ItemsSource = new[] { $"Skill analysis failed: {ex.Message}" };
+            if (generation == skillMatchGeneration)
+                SkillMatchesList.ItemsSource = new[] { $"Skill analysis failed: {ex.Message}" };
         }
     }
 
@@ -1264,14 +1325,14 @@ public partial class MainWindow : Window
             OpenFile(item.FullPath);
     }
 
-    private void AgentFindingsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    private async void AgentFindingsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (AgentFindingsList.SelectedItem is not AgentFinding finding || finding.FilePath is null)
             return;
 
-        OpenFile(finding.FilePath);
-        if (finding.Line is int line)
-            Dispatcher.BeginInvoke(() => NavigateToLine(line), DispatcherPriority.Loaded);
+        var document = await OpenFileAsync(finding.FilePath);
+        if (document is not null && document == activeDocument && finding.Line is int line)
+            NavigateToLine(line);
     }
 
     private void NavigateToLine(int line)
@@ -1368,6 +1429,8 @@ public partial class MainWindow : Window
             activeDocument.Content = Editor.Text;
 
         activeDocument = document;
+        ++activeAnalysisGeneration;
+        ++workspaceAnalysisGeneration;
         suppressChanges = true;
         try
         {
@@ -1388,7 +1451,7 @@ public partial class MainWindow : Window
         if (document.LoadFailed)
             StatusText.Text = "This session tab could not be restored. The editor is read-only to prevent data loss.";
         if (document.NeedsDiskLoad)
-            _ = LoadRestoredDocumentAsync(document);
+            document.LoadTask ??= LoadRestoredDocumentAsync(document);
     }
 
     private async Task LoadRestoredDocumentAsync(DocumentTab document)
@@ -1913,16 +1976,13 @@ public partial class MainWindow : Window
             ApplyViewMode(NormalizeViewMode(session.ViewMode));
             ApplyToolbarVisibility();
             ApplyAgentToolsVisibility();
-            WorkspacePathText.Text = workspaceRoot ?? "No workspace selected";
+            WorkspacePathText.Text = workspaceRoot ?? AgentUi.NoWorkspace;
 
             foreach (var document in session.Documents)
             {
                 var diskAvailable = !document.IsDirty &&
                                     !string.IsNullOrWhiteSpace(document.FilePath) &&
                                     File.Exists(document.FilePath);
-                // A clean document is normally not duplicated in the session JSON.
-                // If its disk file has disappeared, don't offer an empty, writable
-                // placeholder that could overwrite the original path by accident.
                 var missingCleanFile = !document.IsDirty &&
                                        !string.IsNullOrWhiteSpace(document.FilePath) &&
                                        !File.Exists(document.FilePath) &&
@@ -1955,6 +2015,7 @@ public partial class MainWindow : Window
         public bool NeedsDiskLoad { get; set; }
         public bool IsLoading { get; set; }
         public bool LoadFailed { get; set; }
+        public Task? LoadTask { get; set; }
         public Encoding TextEncoding { get; set; } = DocumentSafety.RestoreEncoding(65001, false);
         public string DefaultExtension { get; set; } = ".md";
         public TabItem? Tab { get; set; }
