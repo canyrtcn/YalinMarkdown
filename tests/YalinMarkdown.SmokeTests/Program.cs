@@ -358,7 +358,6 @@ var candidateDlls = new[]
     Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "bin", "Release", "net10.0-windows", "YalinMarkdown.dll"))
 };
 var dllPath = candidateDlls.FirstOrDefault(File.Exists);
-Check(dllPath is not null, "Found compiled YalinMarkdown.dll for version inspection");
 if (dllPath is not null)
 {
     var asm = System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(dllPath);
@@ -366,6 +365,24 @@ if (dllPath is not null)
     var getVersionMethod = mainType?.GetMethod("GetAppVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
     var appVersion = getVersionMethod?.Invoke(null, null) as string;
     Check(appVersion == "v0.1.1", $"Application assembly version is {appVersion} (expected v0.1.1)");
+}
+else
+{
+    // On clean CI checkouts where SmokeTests runs before building MarkdownEditor.csproj,
+    // verify the version metadata in the project definition.
+    var candidateCsprojs = new[]
+    {
+        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "MarkdownEditor.csproj")),
+        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "MarkdownEditor.csproj")),
+        Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "MarkdownEditor.csproj"))
+    };
+    var csprojPath = candidateCsprojs.FirstOrDefault(File.Exists);
+    Check(csprojPath is not null, "Found MarkdownEditor.csproj for version inspection");
+    if (csprojPath is not null)
+    {
+        var csprojText = File.ReadAllText(csprojPath);
+        Check(csprojText.Contains("<Version>0.1.1</Version>"), "MarkdownEditor.csproj specifies Version 0.1.1");
+    }
 }
 
 Console.WriteLine("All YalinMarkdown smoke tests passed.");
