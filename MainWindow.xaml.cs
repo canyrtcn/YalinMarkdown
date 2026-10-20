@@ -90,7 +90,10 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(ApplicationCommands.SaveAs, (_, _) => SaveDocument(true)));
         CommandBindings.Add(new CommandBinding(EditingCommands.ToggleBold, (_, _) => MakeBold()));
 
-        if (!RestoreSession())
+        var startupFiles = Environment.GetCommandLineArgs().Skip(1)
+            .Where(PortableFileAssociations.SupportsPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (!RestoreSession() && startupFiles.Length == 0)
         {
             CreateDocument(
                 "# YalinMarkdown\n\nEdit your Markdown file here.\n\n- Fast\n- Simple\n- Live preview\n\n**Start writing.**",
@@ -105,6 +108,21 @@ public partial class MainWindow : Window
         if (StatusText.Text == "Hazır" || StatusText.Text == "Ready")
             StatusText.Text = T.Ready;
         recoveryTimer.Start();
+        if (startupFiles.Length != 0)
+        {
+            // Open after initialization; preserve existing session tabs and selection.
+            Dispatcher.BeginInvoke(new Action(() => _ = OpenStartupFilesAsync(startupFiles)),
+                DispatcherPriority.Loaded);
+        }
+    }
+
+    private async Task OpenStartupFilesAsync(string[] paths)
+    {
+        foreach (var file in paths)
+            await OpenFileAsync(file); // Reuses size/encoding/read-safety checks.
+
+        if (documents.Count == 0)
+            CreateDocument("# YalinMarkdown\n\nEdit your Markdown file here.", false);
     }
 
     private void InitializeVersionDisplay()
@@ -128,7 +146,7 @@ public partial class MainWindow : Window
             return clean.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? clean : $"v{clean}";
         }
         var version = assembly.GetName().Version;
-        return version is not null ? $"v{version.Major}.{version.Minor}.{version.Build}" : "v0.1.1";
+        return version is not null ? $"v{version.Major}.{version.Minor}.{version.Build}" : "v0.1.2";
     }
 
     private void InitializeLocalizedControls()
@@ -175,6 +193,10 @@ public partial class MainWindow : Window
         NewMarkdownMenuItem.Header = newTypeLabels.Markdown;
         NewTextMenuItem.Header = newTypeLabels.Text;
         OpenButton.Content = T.Open;
+        var associationLabels = AssociationLabels();
+        FileAssociationsButton.Content = associationLabels.Button;
+        RegisterFileTypesMenuItem.Header = associationLabels.Add;
+        UnregisterFileTypesMenuItem.Header = associationLabels.Remove;
         SaveButton.Content = T.Save;
         SaveAsButton.Content = T.SaveAs;
         UndoButton.Content = T.Undo;
@@ -460,7 +482,7 @@ public partial class MainWindow : Window
     {
         var dialog = new OpenFileDialog
         {
-            Filter = $"{T.SupportedFiles} (*.md;*.markdown;*.txt)|*.md;*.markdown;*.txt|{T.MarkdownFiles} (*.md;*.markdown)|*.md;*.markdown|{T.TextFiles} (*.txt)|*.txt",
+            Filter = $"{T.SupportedFiles} (*.md;*.markdown;*.txt;*.text)|*.md;*.markdown;*.txt;*.text|{T.MarkdownFiles} (*.md;*.markdown)|*.md;*.markdown|{T.TextFiles} (*.txt;*.text)|*.txt;*.text",
             Title = T.OpenTitle,
             Multiselect = true
         };
@@ -535,7 +557,8 @@ public partial class MainWindow : Window
     private static bool IsSupportedExtension(string extension) =>
         extension.Equals(".md", StringComparison.OrdinalIgnoreCase) ||
         extension.Equals(".markdown", StringComparison.OrdinalIgnoreCase) ||
-        extension.Equals(".txt", StringComparison.OrdinalIgnoreCase);
+        extension.Equals(".txt", StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(".text", StringComparison.OrdinalIgnoreCase);
 
     private bool SaveDocument(bool saveAs) =>
         activeDocument is not null && SaveDocument(activeDocument, saveAs);
@@ -557,7 +580,7 @@ public partial class MainWindow : Window
         {
             var dialog = new SaveFileDialog
             {
-                Filter = $"{T.MarkdownFiles} (*.md)|*.md|{T.MarkdownFiles} (*.markdown)|*.markdown|{T.TextFiles} (*.txt)|*.txt",
+                Filter = $"{T.MarkdownFiles} (*.md)|*.md|{T.MarkdownFiles} (*.markdown)|*.markdown|{T.TextFiles} (*.txt)|*.txt|{T.TextFiles} (*.text)|*.text",
                 DefaultExt = document.FilePath is null ? document.DefaultExtension : Path.GetExtension(document.FilePath),
                 AddExtension = true,
                 FileName = GetDisplayName(document),
@@ -1480,6 +1503,70 @@ public partial class MainWindow : Window
             current = VisualTreeHelper.GetParent(current);
         }
         return null;
+    }
+
+    private (string Button, string Add, string Remove) AssociationLabels() => currentLanguage switch
+    {
+        "tr" => ("Dosya türleri", "Birlikte aç listesine ekle", "Birlikte aç listesinden kaldır"),
+        "de" => ("Dateitypen", "Zu Öffnen mit hinzufügen", "Aus Öffnen mit entfernen"),
+        "fr" => ("Types de fichiers", "Ajouter à Ouvrir avec", "Retirer de Ouvrir avec"),
+        "es" => ("Tipos de archivo", "Añadir a Abrir con", "Quitar de Abrir con"),
+        "it" => ("Tipi di file", "Aggiungi ad Apri con", "Rimuovi da Apri con"),
+        "zh" => ("文件类型", "添加到打开方式", "从打开方式移除"),
+        "ja" => ("ファイル形式", "プログラムから開くに追加", "プログラムから開くから削除"),
+        "ko" => ("파일 형식", "연결 프로그램에 추가", "연결 프로그램에서 제거"),
+        "ru" => ("Типы файлов", "Добавить в Открыть с помощью", "Удалить из Открыть с помощью"),
+        _ => ("File types", "Add to Open with", "Remove from Open with")
+    };
+
+    private void FileAssociationsButton_Click(object sender, RoutedEventArgs e)
+    {
+        FileAssociationsMenu.PlacementTarget = FileAssociationsButton;
+        FileAssociationsMenu.IsOpen = true;
+    }
+
+    private void RegisterFileTypesMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        var isTurkish = currentLanguage == "tr";
+        var prompt = isTurkish
+            ? "YalinMarkdown .md, .markdown, .txt ve .text için 'Birlikte aç' listesine eklensin mi? Varsayılan uygulama değişmeyecek."
+            : "Add YalinMarkdown to Open with for .md, .markdown, .txt and .text? Your default apps will not change.";
+        if (MessageBox.Show(prompt, T.AppName, MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+        try
+        {
+            PortableFileAssociations.Register();
+            StatusText.Text = isTurkish
+                ? "Birlikte aç kaydı eklendi."
+                : "YalinMarkdown registered in Open with.";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, T.Error, MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void UnregisterFileTypesMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        var isTurkish = currentLanguage == "tr";
+        var prompt = isTurkish
+            ? "Birlikte aç kaydı kaldırılsın mı? YalinMarkdown varsayılan uygulamaysa önce Windows Ayarları'ndan farklı bir uygulama seçin."
+            : "Remove YalinMarkdown from Open with? If it is your default app, choose another in Windows Settings first.";
+        if (MessageBox.Show(prompt, T.AppName, MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+        try
+        {
+            var removed = PortableFileAssociations.Unregister();
+            StatusText.Text = removed
+                ? (isTurkish ? "Birlikte aç kaydı kaldırıldı." : "Open with registration removed.")
+                : (isTurkish ? "Kaldırılacak kayıt bulunamadı." : "No YalinMarkdown registration found.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, T.Error, MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void NewButton_Click(object sender, RoutedEventArgs e)

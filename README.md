@@ -1,6 +1,6 @@
 # YalinMarkdown
 
-[![Release](https://img.shields.io/badge/Release-v0.1.1-2ea44f?style=flat-square)](https://github.com/canyrtcn/YalinMarkdown/releases/tag/v0.1.1) ![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D4?style=flat-square) [![License](https://img.shields.io/badge/License-MIT-97CA00?style=flat-square)](LICENSE) ![.NET](https://img.shields.io/badge/.NET-10-512BD4?style=flat-square) ![UI](https://img.shields.io/badge/UI-WPF-444444?style=flat-square)
+[![Release](https://img.shields.io/badge/Release-v0.1.2-2ea44f?style=flat-square)](https://github.com/canyrtcn/YalinMarkdown/releases/tag/v0.1.2) ![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D4?style=flat-square) [![License](https://img.shields.io/badge/License-MIT-97CA00?style=flat-square)](LICENSE) ![.NET](https://img.shields.io/badge/.NET-10-512BD4?style=flat-square) ![UI](https://img.shields.io/badge/UI-WPF-444444?style=flat-square)
 
 **Fast, simple, and practical Markdown editing for Windows.**
 
@@ -11,7 +11,8 @@ YalinMarkdown provides a clean workspace for writing Markdown, with an editor an
 ## Features
 
 - **Live preview:** see headings, lists, emphasis, links, and code blocks as you write.
-- **Tabbed editing:** open multiple `.md`, `.markdown`, and `.txt` files. Tabs remain in place when selected and can be reordered by dragging.
+- **Tabbed editing:** open multiple `.md`, `.markdown`, `.txt`, and `.text` files. Tabs remain in place when selected and can be reordered by dragging.
+- **Portable file associations:** optionally register YalinMarkdown in Windows **Open with** without an installer or administrator privileges.
 - **Essential editing tools:** formatting actions, undo, font controls, zoom, and editor-only or preview-only views.
 - **Light and dark themes:** switch between two consistent interface styles.
 - **10 languages:** English, Turkish, German, French, Spanish, Italian, Chinese, Japanese, Korean, and Russian. English is the initial default.

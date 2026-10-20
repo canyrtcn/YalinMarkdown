@@ -350,7 +350,7 @@ var truncatedDoc = MarkdownPreviewRenderer.Render(large, previewOptions);
 Check(truncatedDoc.Blocks.OfType<Paragraph>().First().Inlines.OfType<Run>().Any(r => r.Text.Contains("Preview limited for performance")),
     "Oversized document preview displays defensive truncation banner");
 
-// 15. Verify application assembly version is v0.1.1
+// 15. Verify application assembly version is v0.1.2
 var candidateDlls = new[]
 {
     Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "bin", "Release", "net10.0-windows", "YalinMarkdown.dll")),
@@ -364,7 +364,7 @@ if (dllPath is not null)
     var mainType = asm.GetType("YalinMarkdown.MainWindow");
     var getVersionMethod = mainType?.GetMethod("GetAppVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
     var appVersion = getVersionMethod?.Invoke(null, null) as string;
-    Check(appVersion == "v0.1.1", $"Application assembly version is {appVersion} (expected v0.1.1)");
+    Check(appVersion == "v0.1.2", $"Application assembly version is {appVersion} (expected v0.1.2)");
 }
 else
 {
@@ -381,8 +381,38 @@ else
     if (csprojPath is not null)
     {
         var csprojText = File.ReadAllText(csprojPath);
-        Check(csprojText.Contains("<Version>0.1.1</Version>"), "MarkdownEditor.csproj specifies Version 0.1.1");
+        Check(csprojText.Contains("<Version>0.1.2</Version>"), "MarkdownEditor.csproj specifies Version 0.1.2");
     }
+}
+
+// 16. Portable file association declarations (read-only; no registry mutations).
+Check(PortableFileAssociations.Extensions.Length == 4 &&
+      new[] { ".md", ".markdown", ".txt", ".text" }
+          .All(extension => PortableFileAssociations.Extensions.Contains(extension)),
+    "Exactly four Markdown/text extensions are declared");
+Check(PortableFileAssociations.SupportsPath(@"C:\Example Folder\notes.MD") &&
+      PortableFileAssociations.SupportsPath(@"C:\Example Folder\notes.TeXt") &&
+      !PortableFileAssociations.SupportsPath(@"C:\Example Folder\program.exe"),
+    "Supported paths accept case-insensitive extensions and reject EXE files");
+Check(PortableFileAssociations.ProgIdFor(".md") ==
+      PortableFileAssociations.ProgIdFor(".markdown") &&
+      PortableFileAssociations.ProgIdFor(".txt") ==
+      PortableFileAssociations.ProgIdFor(".text") &&
+      PortableFileAssociations.ProgIdFor(".md") !=
+      PortableFileAssociations.ProgIdFor(".txt"),
+    "Markdown and text file groups use distinct application ProgIDs");
+var expectedOpenCommand = string.Concat('"', @"C:\Test Apps\YalinMarkdown.exe", '"', " ", '"', "%1", '"');
+Check(PortableFileAssociations.BuildOpenCommand(@"C:\Test Apps\YalinMarkdown.exe") ==
+      expectedOpenCommand,
+    "Explorer command quotes executable and file path placeholder");
+try
+{
+    PortableFileAssociations.BuildOpenCommand(@"bad""path.exe");
+    Check(false, "Quoted invalid executable path is rejected");
+}
+catch (ArgumentException)
+{
+    Check(true, "Quoted invalid executable path is rejected");
 }
 
 Console.WriteLine("All YalinMarkdown smoke tests passed.");

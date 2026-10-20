@@ -878,6 +878,30 @@
                            Text="Ready"
                            VerticalAlignment="Center" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,12,0">
+                    <Button x:Name="FileAssociationsButton"
+                            Style="{StaticResource ToolbarButton}"
+                            Content="File types"
+                            Padding="7,3"
+                            Margin="0,0,8,0"
+                            Click="FileAssociationsButton_Click">
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="FileAssociationsMenu"
+                                         Placement="Bottom"
+                                         StaysOpen="False"
+                                         Background="{DynamicResource ControlBrush}"
+                                         BorderBrush="{DynamicResource BorderBrush}"
+                                         Foreground="{DynamicResource TextBrush}">
+                                <MenuItem x:Name="RegisterFileTypesMenuItem"
+                                          Style="{StaticResource DarkMenuItemStyle}"
+                                          Header="Add to Open with"
+                                          Click="RegisterFileTypesMenuItem_Click" />
+                                <MenuItem x:Name="UnregisterFileTypesMenuItem"
+                                          Style="{StaticResource DarkMenuItemStyle}"
+                                          Header="Remove from Open with"
+                                          Click="UnregisterFileTypesMenuItem_Click" />
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
                     <TextBlock x:Name="AppVersionText"
                                Text="v0.1.1"
                                Foreground="{DynamicResource MutedTextBrush}"

@@ -16,5 +16,6 @@
     <Compile Include="../../Localization.cs" Link="Localization.cs" />
     <Compile Include="../../AgentPanelLocalization.cs" Link="AgentPanelLocalization.cs" />
     <Compile Include="../../MarkdownPreviewRenderer.cs" Link="MarkdownPreviewRenderer.cs" />
+    <Compile Include="../../PortableFileAssociations.cs" Link="PortableFileAssociations.cs" />
   </ItemGroup>
 </Project>
