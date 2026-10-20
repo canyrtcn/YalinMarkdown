@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Win32;
 using System.IO;
 using System.Text;
@@ -23,6 +24,11 @@ public partial class MainWindow : Window
     private readonly HashSet<string> loadingFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly LiveTextMetrics liveMetrics = new();
     private readonly DispatcherTimer recoveryTimer = new() { Interval = TimeSpan.FromSeconds(60) };
+    // Coalesce rapid keystrokes before constructing an expensive WPF FlowDocument.
+    private readonly DispatcherTimer previewRefreshTimer = new(DispatcherPriority.Background)
+    {
+        Interval = TimeSpan.FromMilliseconds(120)
+    };
     private DocumentTab? activeDocument;
     private bool isDark = true;
     private bool suppressChanges;
@@ -52,25 +58,13 @@ public partial class MainWindow : Window
     private int activeAnalysisGeneration;
     private int workspaceAnalysisGeneration;
     private int skillMatchGeneration;
-    // Live preview retains the side-by-side layout. Ordinary one-line edits replace
-    // only their affected block; structural changes rebuild in bounded UI slices.
     private int previewGeneration;
-    private string[]? previewLines;
-    private Block?[]? previewLineBlocks;
-    private bool previewWasTruncated;
     private static readonly string AppDataDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "YalinMarkdown");
     private static readonly string SessionPath = Path.Combine(AppDataDirectory, "session.json");
     private static readonly string LegacySessionPath = Path.Combine(AppContext.BaseDirectory, "session.json");
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
     private const int DwmUseImmersiveDarkMode = 20;
-
-    private static readonly Regex InlinePattern =
-        new(@"(<span style=""font-(?:family|size):[^""]+"">.+?</span>|\*\*.+?\*\*|__.+?__|~~.+?~~|`.+?`|\*.+?\*|_.+?_|!\[.*?\]\(.+?\)|\[.+?\]\(.+?\))",
-            RegexOptions.Compiled, RegexTimeout);
-    private static readonly Regex StyledSpanPattern =
-        new(@"^<span style=""(?<property>font-family|font-size):(?<value>[^""]+)"">(?<text>.+)</span>$",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase, RegexTimeout);
 
     public MainWindow()
     {
@@ -82,7 +76,13 @@ public partial class MainWindow : Window
         suppressComboChanges = false;
 
         InitializeLocalizedControls();
+        InitializeVersionDisplay();
         recoveryTimer.Tick += (_, _) => SaveSession();
+        previewRefreshTimer.Tick += (_, _) =>
+        {
+            previewRefreshTimer.Stop();
+            RenderPreview(previewGeneration);
+        };
 
         CommandBindings.Add(new CommandBinding(ApplicationCommands.New, (_, _) => NewDocument()));
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Open, (_, _) => OpenDocument()));
@@ -105,6 +105,30 @@ public partial class MainWindow : Window
         if (StatusText.Text == "Hazır" || StatusText.Text == "Ready")
             StatusText.Text = T.Ready;
         recoveryTimer.Start();
+    }
+
+    private void InitializeVersionDisplay()
+    {
+        if (AppVersionText is not null)
+        {
+            var version = GetAppVersion();
+            AppVersionText.Text = version;
+            AppVersionText.ToolTip = $"YalinMarkdown {version}";
+        }
+    }
+
+    internal static string GetAppVersion()
+    {
+        var assembly = typeof(MainWindow).Assembly;
+        var infoVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(infoVersion))
+        {
+            var plusIndex = infoVersion.IndexOf('+');
+            var clean = plusIndex >= 0 ? infoVersion[..plusIndex] : infoVersion;
+            return clean.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? clean : $"v{clean}";
+        }
+        var version = assembly.GetName().Version;
+        return version is not null ? $"v{version.Major}.{version.Minor}.{version.Build}" : "v0.1.1";
     }
 
     private void InitializeLocalizedControls()
@@ -299,140 +323,16 @@ public partial class MainWindow : Window
             liveMetrics.Reset(current);
         UpdateCounts();
 
-        // Single-line edits update only their block in the visible FlowDocument.
-        // If incremental parsing fails, the safe fallback is a sliced rebuild.
-        try
-        {
-            if (!TryPatchLivePreview(current))
-                SchedulePreview();
-        }
-        catch (Exception)
-        {
-            SchedulePreview();
-        }
+        SchedulePreview();
     }
 
     private void SchedulePreview()
     {
-        var generation = ++previewGeneration;
+        ++previewGeneration;
+        previewRefreshTimer.Stop();
         if (PreviewPanel?.Visibility != Visibility.Visible)
             return;
-        Dispatcher.BeginInvoke(new Action(() => RenderPreview(generation)), DispatcherPriority.Background);
-    }
-
-    /// <summary>
-    /// Detect the common single-line change and replace its WPF Block in place.
-    /// The other blocks and the preview scroll position are left alone.
-    /// </summary>
-    private bool TryPatchLivePreview(string text)
-    {
-        if (PreviewPanel?.Visibility != Visibility.Visible || previewLines is null ||
-            previewLineBlocks is null || Preview?.Document is null)
-            return false;
-
-        var excerpt = DocumentSafety.GetPreviewExcerpt(text, out var truncated);
-        if (truncated != previewWasTruncated)
-            return false;
-
-        var newLines = excerpt.Replace("\r\n", "\n").Split('\n');
-        var oldLines = previewLines;
-        var oldBlocks = previewLineBlocks;
-        var prefix = 0;
-        while (prefix < oldLines.Length && prefix < newLines.Length &&
-               string.Equals(oldLines[prefix], newLines[prefix], StringComparison.Ordinal))
-            prefix++;
-        if (prefix == oldLines.Length && prefix == newLines.Length)
-            return true; // Edits outside the preview excerpt need no visual update.
-
-        var oldEnd = oldLines.Length;
-        var newEnd = newLines.Length;
-        while (oldEnd > prefix && newEnd > prefix &&
-               string.Equals(oldLines[oldEnd - 1], newLines[newEnd - 1], StringComparison.Ordinal))
-        {
-            oldEnd--;
-            newEnd--;
-        }
-
-        // If just one line inside a fenced code block changed, update that block.
-        if (oldEnd == prefix + 1 && newEnd == prefix + 1)
-        {
-            var existing = oldBlocks[prefix];
-            if (existing is not null && !oldLines[prefix].TrimStart().StartsWith("```") &&
-                !newLines[prefix].TrimStart().StartsWith("```"))
-            {
-                var groupStart = prefix;
-                var groupEnd = prefix;
-                while (groupStart > 0 && ReferenceEquals(oldBlocks[groupStart - 1], existing))
-                    groupStart--;
-                while (groupEnd + 1 < oldBlocks.Length &&
-                       ReferenceEquals(oldBlocks[groupEnd + 1], existing))
-                    groupEnd++;
-                if (groupStart != groupEnd)
-                {
-                    var code = new StringBuilder();
-                    for (var i = groupStart + 1; i <= groupEnd; i++)
-                    {
-                        if (newLines[i].TrimStart().StartsWith("```"))
-                            break;
-                        code.AppendLine(DocumentSafety.ClipPreviewLine(newLines[i]));
-                    }
-                    var replacement = CreateCodeBlock(code.ToString());
-                    var blocks = Preview.Document.Blocks;
-                    blocks.InsertBefore(existing, replacement);
-                    blocks.Remove(existing);
-                    for (var i = groupStart; i <= groupEnd; i++)
-                        oldBlocks[i] = replacement;
-                    previewLines = newLines;
-                    ++previewGeneration;
-                    return true;
-                }
-            }
-        }
-
-        // A contiguous change consisting exclusively of ordinary Markdown lines
-        // can be spliced in-place, including Enter, Delete, and multi-line paste.
-        // Fenced-code edits or boundaries fall back to the sliced full reparse.
-        for (var i = prefix; i < oldEnd; i++)
-        {
-            var block = oldBlocks[i];
-            if (block is null || oldLines[i].TrimStart().StartsWith("```") ||
-                (i > 0 && ReferenceEquals(oldBlocks[i - 1], block)) ||
-                (i + 1 < oldBlocks.Length && ReferenceEquals(oldBlocks[i + 1], block)))
-                return false;
-        }
-        for (var i = prefix; i < newEnd; i++)
-        {
-            if (newLines[i].TrimStart().StartsWith("```"))
-                return false;
-        }
-        if (prefix > 0 && prefix < oldBlocks.Length &&
-            ReferenceEquals(oldBlocks[prefix - 1], oldBlocks[prefix]))
-            return false;
-        if (oldEnd > 0 && oldEnd < oldBlocks.Length &&
-            ReferenceEquals(oldBlocks[oldEnd - 1], oldBlocks[oldEnd]))
-            return false;
-
-        var section = Preview.Document.Blocks;
-        var nextBlock = oldEnd < oldBlocks.Length ? oldBlocks[oldEnd] : null;
-        var updatedBlocks = new Block?[newLines.Length];
-        Array.Copy(oldBlocks, 0, updatedBlocks, 0, prefix);
-        Array.Copy(oldBlocks, oldEnd, updatedBlocks, newEnd, oldBlocks.Length - oldEnd);
-
-        for (var i = prefix; i < oldEnd; i++)
-            section.Remove(oldBlocks[i]!);
-        for (var i = prefix; i < newEnd; i++)
-        {
-            var block = CreateBlock(DocumentSafety.ClipPreviewLine(newLines[i]));
-            if (nextBlock is null)
-                section.Add(block);
-            else
-                section.InsertBefore(nextBlock, block);
-            updatedBlocks[i] = block;
-        }
-        previewLineBlocks = updatedBlocks;
-        previewLines = newLines;
-        ++previewGeneration;
-        return true;
+        previewRefreshTimer.Start();
     }
 
     private void RenderPreview(int generation)
@@ -440,315 +340,47 @@ public partial class MainWindow : Window
         if (generation != previewGeneration || Preview is null || Editor is null)
             return;
 
-        var document = new FlowDocument
-        {
-            PagePadding = new Thickness(4),
-            FontFamily = Editor.FontFamily,
-            FontSize = ScalePreview(15),
-            Foreground = (Brush)Resources["TextBrush"],
-            Background = Brushes.Transparent,
-            LineHeight = ScalePreview(24)
-        };
-        var excerpt = DocumentSafety.GetPreviewExcerpt(Editor.Text, out var truncated);
-        var lines = excerpt.Replace("\r\n", "\n").Split('\n');
-        var lineBlocks = new Block?[lines.Length];
-        if (truncated)
-        {
-            document.Blocks.Add(new Paragraph(new Run(
-                "Preview limited for performance. The complete file is still editable and will be saved."))
-            {
-                Foreground = (Brush)Resources["MutedTextBrush"],
-                Margin = new Thickness(0, 0, 0, 12),
-                FontStyle = FontStyles.Italic
-            });
-        }
-
-        var cursor = 0;
-        var codeStart = -1;
-        var inCodeBlock = false;
-        var code = new StringBuilder();
-
-        // WPF FlowDocument objects must be created on the UI thread. Slice the work
-        // over dispatcher turns rather than blocking input for 1,200 paragraphs.
-        void AppendNextBatch()
-        {
-            if (generation != previewGeneration)
-                return;
-            try
-            {
-                var batchEnd = Math.Min(cursor + 40, lines.Length);
-                while (cursor < batchEnd)
-                {
-                    var line = lines[cursor];
-                    if (line.TrimStart().StartsWith("```"))
-                    {
-                        if (inCodeBlock)
-                        {
-                            var block = CreateCodeBlock(code.ToString());
-                            document.Blocks.Add(block);
-                            for (var i = codeStart; i <= cursor; i++)
-                                lineBlocks[i] = block;
-                            code.Clear();
-                        }
-                        else
-                        {
-                            codeStart = cursor;
-                        }
-                        inCodeBlock = !inCodeBlock;
-                    }
-                    else if (inCodeBlock)
-                    {
-                        code.AppendLine(DocumentSafety.ClipPreviewLine(line));
-                    }
-                    else
-                    {
-                        var block = CreateBlock(DocumentSafety.ClipPreviewLine(line));
-                        document.Blocks.Add(block);
-                        lineBlocks[cursor] = block;
-                    }
-                    cursor++;
-                }
-
-                if (cursor < lines.Length)
-                {
-                    Dispatcher.BeginInvoke(new Action(AppendNextBatch), DispatcherPriority.Background);
-                    return;
-                }
-                if (code.Length > 0)
-                {
-                    var block = CreateCodeBlock(code.ToString());
-                    document.Blocks.Add(block);
-                    if (codeStart >= 0)
-                    {
-                        for (var i = codeStart; i < lines.Length; i++)
-                            lineBlocks[i] = block;
-                    }
-                }
-                if (generation != previewGeneration)
-                    return;
-
-                var previousOffset = previewLineBlocks is null ? 0 :
-                    (previewScrollViewer ?? FindVisualChild<ScrollViewer>(Preview))?.VerticalOffset ?? 0;
-                if (isPreviewSmoothScrolling)
-                {
-                    CompositionTarget.Rendering -= SmoothScrollPreview;
-                    isPreviewSmoothScrolling = false;
-                }
-                Preview.Document = document;
-                previewLines = lines;
-                previewLineBlocks = lineBlocks;
-                previewWasTruncated = truncated;
-                previewScrollViewer = null;
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    InitializeOverlayScrollbars();
-                    previewScrollViewer?.ScrollToVerticalOffset(previousOffset);
-                    SyncOverlayScrollbars();
-                }), DispatcherPriority.Loaded);
-            }
-            catch (Exception ex)
-            {
-                StatusText.Text = $"{T.PreviewFailed}: {ex.GetType().Name}";
-            }
-        }
-        AppendNextBatch();
-    }
-
-    private Block CreateBlock(string line)
-    {
-        if (string.IsNullOrWhiteSpace(line))
-            return new Paragraph { Margin = new Thickness(0, 4, 0, 4), FontSize = 5 };
-
-        if (line.StartsWith("# "))
-            return Heading(line[2..], ScalePreview(28));
-        if (line.StartsWith("## "))
-            return Heading(line[3..], ScalePreview(23));
-        if (line.StartsWith("### "))
-            return Heading(line[4..], ScalePreview(19));
-        if (line.StartsWith("#### "))
-            return Heading(line[5..], ScalePreview(16));
-
-        if (line.StartsWith("> "))
-        {
-            var quote = ParagraphWithInline(line[2..]);
-            quote.Margin = new Thickness(12, 7, 0, 7);
-            quote.Padding = new Thickness(12, 3, 0, 3);
-            quote.BorderBrush = (Brush)Resources["AccentBrush"];
-            quote.BorderThickness = new Thickness(3, 0, 0, 0);
-            quote.Foreground = (Brush)Resources["MutedTextBrush"];
-            return quote;
-        }
-
-        if (Regex.IsMatch(line, @"^\s*([-*+]|\d+\.)\s+", RegexOptions.None, RegexTimeout))
-        {
-            var match = Regex.Match(line, @"^\s*(?<mark>[-*+]|\d+\.)\s+(?<text>.*)$", RegexOptions.None, RegexTimeout);
-            var paragraph = ParagraphWithInline(match.Groups["text"].Value);
-            paragraph.Margin = new Thickness(12, 3, 0, 3);
-            var listMarker = new Run(match.Groups["mark"].Value + " ")
-            {
-                Foreground = (Brush)Resources["AccentBrush"],
-                FontWeight = FontWeights.Bold
-            };
-            if (paragraph.Inlines.FirstInline is { } firstInline)
-                paragraph.Inlines.InsertBefore(firstInline, listMarker);
-            else
-                paragraph.Inlines.Add(listMarker);
-            return paragraph;
-        }
-
-        if (Regex.IsMatch(line, @"^\s*(-{3,}|\*{3,}|_{3,})\s*$", RegexOptions.None, RegexTimeout))
-        {
-            return new Paragraph
-            {
-                BorderBrush = (Brush)Resources["BorderBrush"],
-                BorderThickness = new Thickness(0, 0, 0, 1),
-                Margin = new Thickness(0, 10, 0, 10)
-            };
-        }
-
-        return ParagraphWithInline(line);
-    }
-
-    private Paragraph Heading(string text, double size)
-    {
-        var paragraph = ParagraphWithInline(text);
-        paragraph.FontSize = size;
-        paragraph.FontWeight = FontWeights.Bold;
-        paragraph.Margin = new Thickness(0, size == 28 ? 10 : 14, 0, 8);
-        paragraph.Foreground = (Brush)Resources["TextBrush"];
-        return paragraph;
-    }
-
-    private Paragraph ParagraphWithInline(string text)
-    {
-        var paragraph = new Paragraph { Margin = new Thickness(0, 3, 0, 7) };
         try
         {
-            AddInlineMarkdown(paragraph, text);
+            var options = new MarkdownPreviewOptions
+            {
+                FontFamily = Editor.FontFamily,
+                BaseFontSize = baseFontSize,
+                PreviewZoom = previewZoom,
+                TextBrush = (Brush)Resources["TextBrush"],
+                MutedTextBrush = (Brush)Resources["MutedTextBrush"],
+                BorderBrush = (Brush)Resources["BorderBrush"],
+                AccentBrush = (Brush)Resources["AccentBrush"],
+                PanelHeaderBrush = (Brush)Resources["PanelHeaderBrush"],
+                HyperlinkNavigateHandler = PreviewLink_RequestNavigate
+            };
+
+            var document = MarkdownPreviewRenderer.Render(Editor.Text, options);
+
+            if (generation != previewGeneration)
+                return;
+
+            var previousOffset = (previewScrollViewer ?? FindVisualChild<ScrollViewer>(Preview))?.VerticalOffset ?? 0;
+            if (isPreviewSmoothScrolling)
+            {
+                CompositionTarget.Rendering -= SmoothScrollPreview;
+                isPreviewSmoothScrolling = false;
+            }
+
+            Preview.Document = document;
+            previewScrollViewer = null;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                InitializeOverlayScrollbars();
+                previewScrollViewer?.ScrollToVerticalOffset(previousOffset);
+                SyncOverlayScrollbars();
+            }), DispatcherPriority.Loaded);
         }
-        catch (RegexMatchTimeoutException)
+        catch (Exception ex)
         {
-            paragraph.Inlines.Clear();
-            paragraph.Inlines.Add(new Run(text));
+            StatusText.Text = $"{T.PreviewFailed}: {ex.GetType().Name}";
         }
-        return paragraph;
     }
-
-    private void AddInlineMarkdown(Paragraph paragraph, string text)
-    {
-        var index = 0;
-        foreach (Match match in InlinePattern.Matches(text))
-        {
-            if (match.Index > index)
-                paragraph.Inlines.Add(new Run(text[index..match.Index]));
-
-            var token = match.Value;
-            if ((token.StartsWith("**") || token.StartsWith("__")) && token.Length >= 4)
-            {
-                paragraph.Inlines.Add(new Bold(new Run(token[2..^2])));
-            }
-            else if (token.StartsWith("`") && token.Length >= 2)
-            {
-                paragraph.Inlines.Add(new Run(token[1..^1])
-                {
-                    FontFamily = new FontFamily("Consolas"),
-                    Background = (Brush)Resources["PanelHeaderBrush"],
-                    Foreground = (Brush)Resources["AccentBrush"]
-                });
-            }
-            else if (token.StartsWith("~~") && token.Length >= 4)
-            {
-                paragraph.Inlines.Add(new Run(token[2..^2]) { TextDecorations = TextDecorations.Strikethrough });
-            }
-            else if (token.StartsWith("<span style=", StringComparison.OrdinalIgnoreCase))
-            {
-                paragraph.Inlines.Add(CreateStyledRun(token));
-            }
-            else if (token.StartsWith("!["))
-            {
-                paragraph.Inlines.Add(new Run(token) { Foreground = (Brush)Resources["MutedTextBrush"] });
-            }
-            else if (token.StartsWith("[") && token.Contains("](") && token.EndsWith(')'))
-            {
-                var end = token.IndexOf(']');
-                var url = token[(end + 2)..^1];
-                try
-                {
-                    var uri = new Uri(url, UriKind.RelativeOrAbsolute);
-                    // Never turn file:, javascript: or custom schemes into clickable links.
-                    if (uri.IsAbsoluteUri && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
-                    {
-                        var link = new Hyperlink(new Run(token[1..end]))
-                        {
-                            NavigateUri = uri,
-                            Foreground = (Brush)Resources["AccentBrush"]
-                        };
-                        link.RequestNavigate += PreviewLink_RequestNavigate;
-                        paragraph.Inlines.Add(link);
-                    }
-                    else
-                    {
-                        paragraph.Inlines.Add(new Run(token));
-                    }
-                }
-                catch
-                {
-                    paragraph.Inlines.Add(new Run(token));
-                }
-            }
-            else if (token.Length >= 2)
-            {
-                paragraph.Inlines.Add(new Italic(new Run(token[1..^1])));
-            }
-            else
-            {
-                paragraph.Inlines.Add(new Run(token));
-            }
-            index = match.Index + match.Length;
-        }
-
-        if (index < text.Length)
-            paragraph.Inlines.Add(new Run(text[index..]));
-    }
-
-    private Run CreateStyledRun(string token)
-    {
-        var match = StyledSpanPattern.Match(token);
-        if (!match.Success)
-            return new Run(token);
-
-        var run = new Run(match.Groups["text"].Value);
-        var property = match.Groups["property"].Value;
-        var value = match.Groups["value"].Value;
-        if (property.Equals("font-family", StringComparison.OrdinalIgnoreCase) &&
-            Fonts.SystemFontFamilies.Any(font => font.Source.Equals(value, StringComparison.OrdinalIgnoreCase)))
-        {
-            run.FontFamily = new FontFamily(value);
-        }
-        else if (property.Equals("font-size", StringComparison.OrdinalIgnoreCase) &&
-                 double.TryParse(value.Replace("px", string.Empty, StringComparison.OrdinalIgnoreCase),
-                     NumberStyles.Number, CultureInfo.InvariantCulture, out var size))
-        {
-            run.FontSize = Math.Clamp(size, 6, 144);
-        }
-        return run;
-    }
-
-    private Paragraph CreateCodeBlock(string text) =>
-        new(new Run(text.TrimEnd())
-        {
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = (Brush)Resources["AccentBrush"]
-        })
-        {
-            Background = (Brush)Resources["PanelHeaderBrush"],
-            BorderBrush = (Brush)Resources["BorderBrush"],
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(12),
-            Margin = new Thickness(0, 7, 0, 10)
-        };
-
-    private double ScalePreview(double value) => value * (baseFontSize / 15.0) * previewZoom / 100.0;
 
     private void UpdateCounts()
     {
@@ -1443,8 +1075,6 @@ public partial class MainWindow : Window
         UpdateTitle();
         liveMetrics.Reset(Editor.Text);
         UpdateCounts();
-        previewLines = null; // A different tab cannot patch the previous tab's preview.
-        previewLineBlocks = null;
         SchedulePreview();
         Editor.Focus();
         Editor.IsReadOnly = document.NeedsDiskLoad || document.IsLoading || document.LoadFailed;
@@ -1875,7 +1505,8 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        ++previewGeneration; // Cancel any incomplete preview work.
+        ++previewGeneration; // Cancel any pending preview work.
+        previewRefreshTimer.Stop();
         recoveryTimer.Stop();
         CompositionTarget.Rendering -= SmoothScrollPreview;
         CompositionTarget.Rendering -= SmoothScrollEditor;

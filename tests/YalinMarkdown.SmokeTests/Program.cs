@@ -1,5 +1,10 @@
+using System.IO;
 using System.Text;
+using System.Windows;
+using System.Windows.Documents;
+using System.Windows.Media;
 using YalinMarkdown;
+using Localization = YalinMarkdown.Localization;
 
 static void Check(bool result, string message)
 {
@@ -178,6 +183,189 @@ try
 finally
 {
     Directory.Delete(agentDir, recursive: true);
+}
+
+// =========================================================================
+// MarkdownPreviewRenderer regression and feature tests (Markdig-backed FlowDocument)
+// =========================================================================
+
+var previewOptions = new MarkdownPreviewOptions
+{
+    FontFamily = new FontFamily("Consolas"),
+    BaseFontSize = 15,
+    PreviewZoom = 100,
+    TextBrush = Brushes.Black,
+    MutedTextBrush = Brushes.Gray,
+    BorderBrush = Brushes.LightGray,
+    AccentBrush = Brushes.Green,
+    PanelHeaderBrush = Brushes.WhiteSmoke
+};
+
+// 1. Headings H1 to H6
+var headingsMd = "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6";
+var headingsDoc = MarkdownPreviewRenderer.Render(headingsMd, previewOptions);
+Check(headingsDoc.Blocks.Count == 6, "All 6 heading levels generate FlowDocument blocks");
+var h1 = (Paragraph)headingsDoc.Blocks.ElementAt(0);
+var h2 = (Paragraph)headingsDoc.Blocks.ElementAt(1);
+var h6 = (Paragraph)headingsDoc.Blocks.ElementAt(5);
+Check(h1.FontSize > h2.FontSize && h2.FontSize > h6.FontSize, "Heading font sizes scale appropriately");
+Check(h1.BorderThickness.Bottom == 1 && h2.BorderThickness.Bottom == 1, "H1 and H2 include bottom divider border");
+Check(h6.Foreground == previewOptions.MutedTextBrush, "H6 uses muted foreground");
+
+// 2. GitHub Flavored Markdown Tables (headers, borders, alignment)
+var tableMd = @"
+| Left | Center | Right | Default |
+| :--- | :---: | ---: | --- |
+| L1   | C1     | R1   | D1      |
+| L2   | C2     | R2   | D2      |
+";
+var tableDoc = MarkdownPreviewRenderer.Render(tableMd, previewOptions);
+Check(tableDoc.Blocks.OfType<Table>().Any(), "GFM table is parsed into a native WPF Table block");
+var table = tableDoc.Blocks.OfType<Table>().First();
+Check(table.Columns.Count == 4, "Table has 4 columns");
+Check(table.RowGroups.Count == 1 && table.RowGroups[0].Rows.Count == 3, "Table has 1 header row and 2 data rows");
+var headerRow = table.RowGroups[0].Rows[0];
+var dataRow1 = table.RowGroups[0].Rows[1];
+Check(headerRow.Cells[0].FontWeight == FontWeights.Bold, "Table header row cells are bold");
+Check(dataRow1.Cells[0].TextAlignment == TextAlignment.Left, "Left-aligned column has TextAlignment.Left");
+Check(dataRow1.Cells[1].TextAlignment == TextAlignment.Center, "Center-aligned column has TextAlignment.Center");
+Check(dataRow1.Cells[2].TextAlignment == TextAlignment.Right, "Right-aligned column has TextAlignment.Right");
+Check(dataRow1.Cells[0].BorderThickness == new Thickness(1), "Table cells have border outline");
+
+// 3. Task lists ([ ] and [x])
+var taskListMd = "- [ ] Unfinished item\n- [x] Finished item\n- [X] Another finished item";
+var taskDoc = MarkdownPreviewRenderer.Render(taskListMd, previewOptions);
+Check(taskDoc.Blocks.OfType<List>().Any(), "Task list is parsed into a List block");
+var taskList = taskDoc.Blocks.OfType<List>().First();
+Check(taskList.ListItems.Count == 3, "Task list has 3 items");
+var taskText1 = string.Concat(taskDoc.Blocks.OfType<List>().First().ListItems.ElementAt(0).Blocks.OfType<Paragraph>().SelectMany(p => p.Inlines).OfType<Run>().Select(r => r.Text));
+var taskText2 = string.Concat(taskDoc.Blocks.OfType<List>().First().ListItems.ElementAt(1).Blocks.OfType<Paragraph>().SelectMany(p => p.Inlines).OfType<Run>().Select(r => r.Text));
+Check(taskText1.Contains("☐") && taskText1.Contains("Unfinished item"), "Unchecked task list item contains unchecked box symbol");
+Check(taskText2.Contains("☑") && taskText2.Contains("Finished item"), "Checked task list item contains checked box symbol");
+
+// Mixed task and ordinary list items must not lose the ordinary bullet marker.
+var mixedListMd = "- [x] Completed\n- Normal item\n- [ ] Pending";
+var mixedListDoc = MarkdownPreviewRenderer.Render(mixedListMd, previewOptions);
+var mixedList = mixedListDoc.Blocks.OfType<List>().First();
+Check(mixedList.MarkerStyle == TextMarkerStyle.None, "Mixed checkbox list suppresses common WPF marker");
+var mixedText = string.Concat(mixedList.ListItems.ElementAt(1).Blocks.OfType<Paragraph>()
+    .SelectMany(p => p.Inlines).OfType<Run>().Select(r => r.Text));
+Check(mixedText.Contains("• ") && mixedText.Contains("Normal item"),
+    "Mixed checkbox list keeps the ordinary item's bullet marker");
+
+// 4. Nested lists (ordered and unordered)
+var nestedListMd = @"
+- Parent 1
+  - Child 1.1
+  - Child 1.2
+- Parent 2
+  1. Ordered 1
+  2. Ordered 2
+";
+var nestedDoc = MarkdownPreviewRenderer.Render(nestedListMd, previewOptions);
+var topList = nestedDoc.Blocks.OfType<List>().First();
+Check(topList.ListItems.Count == 2, "Top-level list has 2 items");
+var childListInItem1 = topList.ListItems.ElementAt(0).Blocks.OfType<List>().FirstOrDefault();
+Check(childListInItem1 != null && childListInItem1.ListItems.Count == 2, "Nested unordered list rendered inside parent ListItem");
+var childListInItem2 = topList.ListItems.ElementAt(1).Blocks.OfType<List>().FirstOrDefault();
+Check(childListInItem2 != null && childListInItem2.MarkerStyle == TextMarkerStyle.Decimal, "Nested ordered list rendered with Decimal marker");
+
+// 5. Blockquotes and nested blockquotes
+var quoteMd = "> Top quote\n>> Nested quote\n> Continues";
+var quoteDoc = MarkdownPreviewRenderer.Render(quoteMd, previewOptions);
+Check(quoteDoc.Blocks.OfType<Section>().Any(), "Blockquote is parsed into a Section block with accent border");
+var topQuote = quoteDoc.Blocks.OfType<Section>().First();
+Check(topQuote.BorderThickness.Left == 3 && topQuote.BorderBrush == previewOptions.AccentBrush, "Blockquote has accent left border");
+Check(topQuote.Blocks.OfType<Section>().Any(), "Nested blockquote rendered as child Section");
+
+// 6. Thematic break (horizontal rule)
+var hrMd = "Text before\n\n---\n\nText after";
+var hrDoc = MarkdownPreviewRenderer.Render(hrMd, previewOptions);
+Check(hrDoc.Blocks.Count == 3, "Horizontal rule rendered between paragraphs");
+var hrPara = (Paragraph)hrDoc.Blocks.ElementAt(1);
+Check(hrPara.BorderThickness.Bottom == 1, "Horizontal rule has bottom border");
+
+// 7. Bold, Italic, Strikethrough and combinations
+var formatMd = "**bold** and *italic* and ***bold italic*** and ~~strikethrough~~ and **~~bold strike~~**";
+var formatDoc = MarkdownPreviewRenderer.Render(formatMd, previewOptions);
+var pFormat = (Paragraph)formatDoc.Blocks.First();
+Check(pFormat.Inlines.OfType<Bold>().Any(), "Bold inline is parsed");
+Check(pFormat.Inlines.OfType<Italic>().Any(), "Italic inline is parsed");
+Check(pFormat.Inlines.OfType<Span>().Any(s => s.TextDecorations == TextDecorations.Strikethrough), "Strikethrough inline is parsed");
+
+// Toolbar-created font-size spans must survive Markdig's HTML inline parsing.
+var styledMd = "Text <span style=\"font-size:22px\">larger **bold**</span> end";
+var styledDoc = MarkdownPreviewRenderer.Render(styledMd, previewOptions);
+var styledParagraph = (Paragraph)styledDoc.Blocks.First();
+var styledSpan = styledParagraph.Inlines.OfType<Span>()
+    .FirstOrDefault(span => Math.Abs(span.FontSize - 22) < 0.01);
+Check(styledSpan is not null && styledSpan.Inlines.OfType<Bold>().Any(),
+    "Toolbar font-size span preserves its size and nested Markdown bold");
+Check(!styledParagraph.Inlines.OfType<Run>().Any(run => run.Text.Contains("</span>")),
+    "Toolbar styled span does not leak HTML closing tags into preview");
+
+// 8. Code blocks and inline code
+var codeMd = "Inline `code snippet` here.\n\n```csharp\nvar x = 1;\nvar y = 2;\n```";
+var codeDoc = MarkdownPreviewRenderer.Render(codeMd, previewOptions);
+var codePara = (Paragraph)codeDoc.Blocks.ElementAt(0);
+Check(codePara.Inlines.OfType<Run>().Any(r => r.Text == "code snippet" && r.FontFamily.Source == "Consolas"), "Inline code has Consolas font");
+var codeBlockPara = (Paragraph)codeDoc.Blocks.ElementAt(1);
+Check(codeBlockPara.FontFamily.Source == "Consolas" && codeBlockPara.BorderThickness == new Thickness(1), "Code block has Consolas font and border");
+
+// 9. Links and Markdown images
+var linksMd = "Visit [OpenAI](https://openai.com) and ![Demo Image](https://example.com/logo.png)";
+var linksDoc = MarkdownPreviewRenderer.Render(linksMd, previewOptions);
+var linksPara = (Paragraph)linksDoc.Blocks.First();
+Check(linksPara.Inlines.OfType<Hyperlink>().Any(h => h.NavigateUri == new Uri("https://openai.com")), "External HTTPS link is parsed into Hyperlink");
+Check(linksPara.Inlines.OfType<Span>().Any(s => s.Inlines.OfType<Run>().Any(r => r.Text.Contains("🖼 [Demo Image]"))), "Markdown image rendered safely as an image badge without downloading");
+
+// 10. Malformed or unsafe links (javascript:, file:)
+var unsafeMd = "[Evil Link](javascript:alert(1)) and [File Link](file:///C:/Windows/win.ini)";
+var unsafeDoc = MarkdownPreviewRenderer.Render(unsafeMd, previewOptions);
+var unsafePara = (Paragraph)unsafeDoc.Blocks.First();
+Check(!unsafePara.Inlines.OfType<Hyperlink>().Any(), "Unsafe link schemes are not rendered as clickable Hyperlinks");
+
+// 11. Escaped Markdown characters and multiline paragraphs
+var escapeMd = "Look at \\*not italic\\* and \\[not link\\] and \\# not heading";
+var escapeDoc = MarkdownPreviewRenderer.Render(escapeMd, previewOptions);
+var escapePara = (Paragraph)escapeDoc.Blocks.First();
+var escapeText = string.Concat(escapePara.Inlines.OfType<Run>().Select(r => r.Text));
+Check(!escapePara.Inlines.OfType<Italic>().Any(), "Escaped asterisk is not parsed as italic");
+Check(escapeText.Contains("*not italic*") && escapeText.Contains("[not link]"), "Escaped characters render as literal text");
+
+// 12. Multiline paragraph with soft break vs hard break
+var multilineMd = "Line 1\nLine 2  \nLine 3";
+var multiDoc = MarkdownPreviewRenderer.Render(multilineMd, previewOptions);
+var multiPara = (Paragraph)multiDoc.Blocks.First();
+Check(multiPara.Inlines.OfType<LineBreak>().Any(), "Hard line break (two spaces) renders as LineBreak");
+
+// 13. Safety: embedded script tags are never executed
+var scriptMd = "Normal text\n\n<script>alert('hack');</script>\n\nMore text";
+var scriptDoc = MarkdownPreviewRenderer.Render(scriptMd, previewOptions);
+var scriptTexts = scriptDoc.Blocks.OfType<Paragraph>().SelectMany(p => p.Inlines).OfType<Run>().Select(r => r.Text);
+Check(!scriptTexts.Any(t => t.Contains("alert('hack')")), "Embedded script block is suppressed and never executed");
+
+// 14. Document truncation notice
+var truncatedDoc = MarkdownPreviewRenderer.Render(large, previewOptions);
+Check(truncatedDoc.Blocks.OfType<Paragraph>().First().Inlines.OfType<Run>().Any(r => r.Text.Contains("Preview limited for performance")),
+    "Oversized document preview displays defensive truncation banner");
+
+// 15. Verify application assembly version is v0.1.1
+var candidateDlls = new[]
+{
+    Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "bin", "Release", "net10.0-windows", "YalinMarkdown.dll")),
+    Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "bin", "Release", "net10.0-windows", "YalinMarkdown.dll")),
+    Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "bin", "Release", "net10.0-windows", "YalinMarkdown.dll"))
+};
+var dllPath = candidateDlls.FirstOrDefault(File.Exists);
+Check(dllPath is not null, "Found compiled YalinMarkdown.dll for version inspection");
+if (dllPath is not null)
+{
+    var asm = System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(dllPath);
+    var mainType = asm.GetType("YalinMarkdown.MainWindow");
+    var getVersionMethod = mainType?.GetMethod("GetAppVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+    var appVersion = getVersionMethod?.Invoke(null, null) as string;
+    Check(appVersion == "v0.1.1", $"Application assembly version is {appVersion} (expected v0.1.1)");
 }
 
 Console.WriteLine("All YalinMarkdown smoke tests passed.");

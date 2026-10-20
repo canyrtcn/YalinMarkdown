@@ -27,6 +27,7 @@ ALLOWED_FILES = {
     'MainWindow.xaml',
     'MainWindow.xaml.cs',
     'MarkdownEditor.csproj',
+    'MarkdownPreviewRenderer.cs',
     'NuGet.Config',
     'README.md',
     'assets/app-icon.svg',
